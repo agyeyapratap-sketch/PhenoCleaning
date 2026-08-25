@@ -4,4 +4,5 @@ numpy==2.5.1
 pandas==3.0.3
 scipy==1.18.0
 matplotlib==3.11.0
+pillow==12.3.0          # used directly to encode the turntable animation (also a matplotlib dep)
 openpyxl==3.1.5

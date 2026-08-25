@@ -682,6 +682,65 @@ with tabs[7]:
             kv, kf = pe_data.filter_mesh(verts, faces, scope)
             plot_mesh3d(kv, kf)
 
+            # ---- turntable animation (spin the plant for slides/figures) ----
+            st.markdown("#### Turntable animation")
+            st.caption("Spin this plant into a looping animation for talks, figures, or the "
+                       "supplement — a self-contained port of the *3d-turntable-animator*, "
+                       "rendered here with no extra software (saves a GIF, no ffmpeg needed).")
+            tt_pts = view_pts if len(view_pts) else verts[vmask]
+            has_mesh = kf is not None and len(kf) > 0
+            t1, t2, t3, t4 = st.columns(4)
+            what = t1.radio("Spin", (["point cloud", "mesh surface"] if has_mesh else ["point cloud"]),
+                            horizontal=False,
+                            help="Point cloud keeps the true per-point colour; the mesh spins the "
+                                 "reconstructed surface.")
+            colour = t2.selectbox("Colour by",
+                                   ["true colour", "NDVI", "greenness (G−R)", "NIR",
+                                    "NIR940", "hue", "intensity", "height"],
+                                   help="True colour uses the scan's RGB; every other option maps "
+                                        "one of the spectral/structural channels the app renders "
+                                        "elsewhere onto the same colour scales.")
+            spin_axis = t3.selectbox("Spin axis (up)", ["z (upright)", "y", "x"], index=0,
+                                     help="Which axis stands up and is spun about. Plants stand on z.")
+            bg = t4.selectbox("Background", ["white", "black"], index=0)
+            s1, s2, s3, s4 = st.columns(4)
+            duration = s1.slider("duration (s)", 2, 20, 5, 1)
+            fps = s2.slider("frames / second", 8, 30, 15, 1)
+            turns = s3.slider("turns", 1, 4, 1, 1)
+            px = s4.selectbox("size (px)", [360, 480, 720], index=1)
+            s5, s6 = st.columns(2)
+            elev = s5.slider("camera tilt (elevation °)", -10, 60, 18, 2)
+            psize = s6.slider("point size", 0.5, 6.0, 2.0, 0.5,
+                              help="Bigger dots close gaps in a sparse cloud (ignored for the mesh).")
+            n_frames = int(round(duration * fps))
+            if n_frames > 300:
+                n_frames = 300
+                st.caption(f"Capped at 300 frames (~{300/fps:.0f}s at {fps} fps) to keep rendering quick.")
+            st.caption(f"{n_frames} frames · {'mesh' if what == 'mesh surface' else f'{min(len(tt_pts),60000):,} points'} "
+                       f"· loops seamlessly.")
+            if st.button("🎞 Render turntable"):
+                cb = {"true colour": "rgb", "NDVI": "ndvi", "greenness (G−R)": "greenness",
+                      "NIR": "nir", "NIR940": "nir940", "hue": "hue", "intensity": "intensity",
+                      "height": "height"}[colour]
+                bar = st.progress(0.0)
+                with st.spinner("Rendering frames…"):
+                    gif = pe_data.turntable_gif(
+                        tt_pts, faces=(kf if what == "mesh surface" else None),
+                        color_by=cb, up_axis=spin_axis[0], turns=turns, n_frames=n_frames,
+                        fps=fps, size=int(px), elev=elev, bg=bg, point_size=psize,
+                        brighten=brighten, progress=lambda f: bar.progress(min(f, 1.0)))
+                bar.empty()
+                SS["turntable_gif"] = gif
+                SS["turntable_name"] = f"{Path(path).stem}_turntable.gif"
+            if SS.get("turntable_gif"):
+                st.image(SS["turntable_gif"], caption="Turntable preview (animated GIF)")
+                st.download_button("⬇ turntable (.gif)", SS["turntable_gif"],
+                                   SS.get("turntable_name", "turntable.gif"), "image/gif",
+                                   width="stretch")
+                st.caption("Drop the GIF straight into slides, or convert to MP4 elsewhere if a "
+                           "journal needs it. For a browser-based MP4/WebM export, the standalone "
+                           "*3d-turntable-animator* web app renders one client-side.")
+
             # ---- optional mesh traits + portal comparison ----
             st.markdown("#### Mesh traits (optional)")
             calc = st.checkbox("Calculate mesh traits and compare to PlantEye's portal traits", value=False)

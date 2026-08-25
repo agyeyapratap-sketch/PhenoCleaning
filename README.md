@@ -23,6 +23,9 @@ imputes or silently merges.
 - **Irregular-timing time-series** on a true elapsed-days axis (no imputation).
 - **3D viewer** — per-plant RGB / NIR / NDVI panels, geometry-based **soil/pot-rim removal**
   (moss-proof), mesh reconstruction, and mesh-vs-portal trait comparison.
+- **Turntable animation** — spin any plant (point cloud or reconstructed mesh) into a looping
+  GIF for talks, figures, or the supplement — coloured by true RGB or any spectral channel
+  (NDVI, greenness, NIR, hue…). Self-contained: no ffmpeg or extra software needed.
 - **Export** — tidy CSVs, cleaned mesh `.ply`, and a full audit log.
 
 ## Install (no coding required)

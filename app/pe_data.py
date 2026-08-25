@@ -507,6 +507,114 @@ def rasterise_rgb(pts: np.ndarray, axes=("x", "y"), res_mm: float = 2.0,
     return img, ext
 
 
+def turntable_gif(pts: np.ndarray, faces=None, *, color_by="rgb", up_axis="z",
+                  turns: int = 1, n_frames: int = 60, fps: int = 20, size: int = 480,
+                  elev: float = 18.0, margin: float = 1.15, bg: str = "white",
+                  point_size: float = 2.0, brighten: float = 1.6,
+                  max_points: int = 60000, progress=None) -> bytes:
+    """Render a looping **turntable animation** of a point cloud (or mesh) → animated-GIF bytes.
+
+    A companion to the standalone *3d-turntable-animator* (github.com/agyeyapratap-sketch/
+    3d-turntable-animator): the framing follows its reference ``render_turntable.py`` — centre
+    the geometry, fit the camera from the bounding sphere and a margin, and orbit about the
+    chosen up-axis — but rendering here uses **matplotlib (Agg) + Pillow** instead of
+    Open3D/ffmpeg, so it runs headless, needs no extra dependency, and reuses the app's
+    existing 3D machinery. The camera (not the data) orbits: elevation is held and azimuth
+    sweeps ``360×turns`` degrees, so the loop is seamless.
+
+    ``color_by`` — ``'rgb'`` (true colour, brightened) or any spectral channel the app
+    already renders: ``'ndvi'``, ``'greenness'``, ``'nir'``, ``'nir940'``, ``'hue'``,
+    ``'intensity'``, plus ``'height'``.
+    ``up_axis`` — which data axis stands up / is spun about (``'z'`` for an upright plant).
+    ``faces`` — if an (M,3) index array is given, the triangulated surface is spun instead of
+    points. Returns GIF bytes for ``st.image`` and a download button.
+    """
+    import io
+    import mpl_toolkits.mplot3d  # noqa: F401  (registers the '3d' projection)
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib import colormaps, colors as mcolors
+    from PIL import Image
+
+    is_mesh = faces is not None and len(faces) > 0
+    xyz = _xyz(pts)
+    if len(xyz) == 0:
+        raise ValueError("no points to animate")
+
+    # decimate a dense *point* cloud for responsiveness (the reference defers this too);
+    # a mesh keeps every vertex so its face indices stay valid.
+    src = pts
+    if not is_mesh and max_points and len(xyz) > max_points:
+        sel = np.random.default_rng(0).choice(len(xyz), int(max_points), replace=False)
+        xyz, src = xyz[sel], pts[sel]
+
+    # stand the requested axis up (matplotlib's vertical is z), then centre on the bounding box
+    order = {"x": (1, 2, 0), "y": (2, 0, 1), "z": (0, 1, 2)}[up_axis]
+    xyz = xyz[:, order]
+    xyz = xyz - (xyz.min(axis=0) + xyz.max(axis=0)) / 2.0
+    # Frame so the plant fills the frame vertically without ever clipping as it spins: the
+    # horizontal half-extent is the in-plane radius (the widest the silhouette gets at any
+    # azimuth), the vertical half-extent is the height. A matching box_aspect keeps it true-scale.
+    rh = (float(np.hypot(xyz[:, 0], xyz[:, 1]).max()) or 1.0) * float(margin)
+    rz = (float(np.abs(xyz[:, 2]).max()) or 1.0) * float(margin)
+
+    # colours, matched to the rest of the app — true colour or any spectral channel
+    _CH_CMAP = {"ndvi": "RdYlGn", "greenness": "RdYlGn", "nir": "inferno",
+                "nir940": "inferno", "hue": "hsv", "intensity": "gray",
+                "height": "YlGn"}
+    facecolors = None
+    if color_by == "rgb" and all(c in src.dtype.names for c in ("red", "green", "blue")):
+        rgb = np.column_stack([src["red"], src["green"], src["blue"]]).astype(float) / 255.0
+        col = np.clip(rgb * float(brighten), 0, 1)
+    else:
+        vals = xyz[:, 2] if color_by == "height" else channel_values(src, color_by)
+        vlo, vhi = np.percentile(vals, [2, 98]) if len(vals) > 1 else (0.0, 1.0)
+        norm = mcolors.Normalize(vlo, vhi if vhi > vlo else vlo + 1)
+        col = colormaps[_CH_CMAP.get(color_by, "viridis")](norm(vals))
+    if is_mesh:
+        facecolors = col  # per-vertex; trisurf averages to faces
+
+    dark = bg == "black"
+    fig = Figure(figsize=(size / 100.0, size / 100.0), dpi=100,
+                 facecolor="black" if dark else "white")
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_facecolor("black" if dark else "white")
+
+    if is_mesh:
+        ax.plot_trisurf(xyz[:, 0], xyz[:, 1], xyz[:, 2], triangles=np.asarray(faces),
+                        color="#7cbf6b" if facecolors is None else None,
+                        linewidth=0, antialiased=False, shade=facecolors is None)
+        # per-vertex colour → average onto triangles (plot_trisurf can't take vertex colours)
+        if facecolors is not None:
+            tri = ax.collections[-1]
+            tri.set_fc(facecolors[np.asarray(faces)].mean(axis=1))
+    else:
+        ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=col, s=float(point_size),
+                   linewidths=0, depthshade=False)
+
+    ax.set_box_aspect((rh, rh, rz))
+    ax.set_xlim(-rh, rh); ax.set_ylim(-rh, rh); ax.set_zlim(-rz, rz)
+    ax.set_axis_off()
+
+    frames = []
+    n_frames = max(2, int(n_frames))
+    for i in range(n_frames):
+        ax.view_init(elev=float(elev), azim=-60.0 + 360.0 * int(turns) * i / n_frames)
+        fig.canvas.draw()
+        frames.append(Image.frombytes(
+            "RGBA", fig.canvas.get_width_height(),
+            bytes(fig.canvas.buffer_rgba())).convert("RGB"))
+        if progress:
+            progress((i + 1) / n_frames)
+
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
+                   loop=0, duration=int(round(1000.0 / max(1, int(fps)))),
+                   disposal=2, optimize=True)
+    return buf.getvalue()
+
+
 _PLY_HDR_TYPE = {"float32": "float", "uint8": "uchar", "uint16": "ushort", "int32": "int"}
 
 
