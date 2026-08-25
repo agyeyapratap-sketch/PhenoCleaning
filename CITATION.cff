@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "PlantEye Pipeline: an auditable pipeline for 3D multispectral plant-phenotyping time-series"
+abstract: >-
+  An auditable, design-agnostic pipeline that turns the raw outputs of a Phenospex PlantEye /
+  TraitFinder scanner (tabular exports and 3D point clouds) into a clean, quality-controlled,
+  analysis-ready dataset. It reconciles multiple exports, encodes quality-control and missing-data
+  checks, handles irregular-timing time-series without imputation, and offers geometry-based
+  soil/pot-rim removal and per-plant spectral rendering. All curation is user-driven and
+  non-destructive.
+type: software
+authors:
+  - given-names: Agyeya
+    family-names: Pratap
+    affiliation: "Australian Plant Phenomics Network, The University of Western Australia"
+version: "1.0.0"
+license: MIT
+repository-code: "https://github.com/USERNAME/REPO"
+keywords:
+  - plant phenotyping
+  - PlantEye
+  - point cloud
+  - reproducibility
+  - time-series
+  - data quality

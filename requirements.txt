@@ -1,0 +1,7 @@
+# PlantEye pipeline app — pinned dependencies (verified working set)
+streamlit==1.59.2
+numpy==2.5.1
+pandas==3.0.3
+scipy==1.18.0
+matplotlib==3.11.0
+openpyxl==3.1.5

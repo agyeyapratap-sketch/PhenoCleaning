@@ -1,0 +1,51 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ── PyInstaller / build outputs (regenerated; never commit) ──────────────────
+build/
+dist/
+*.manifest
+# NOTE: packaging/planteye.spec IS committed — it is the build recipe.
+
+# ── Inno Setup installer output ──────────────────────────────────────────────
+packaging/Output/
+# installers ship as release assets, never committed (inline comments are NOT allowed in .gitignore)
+*.exe
+
+# ── Secrets / environment ────────────────────────────────────────────────────
+.env
+*.env
+.streamlit/secrets.toml
+
+# ── Unpublished research material & dev-only scripts (NOT part of the public tool) ──
+docs/
+tools/build_design_pdf.py
+tools/verify_reader.py
+
+# ── Data — NEVER commit experiment data ──────────────────────────────────────
+*.ply
+*.zip
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.parquet
+*.npy
+*.h5
+*.hdf5
+*.docx
+*.pdf
+out/
+cleaned_ply/
+*.log
+
+# ── OS / editor cruft ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

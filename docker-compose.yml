@@ -1,0 +1,36 @@
+# OPTIONAL container deployment. The primary distribution is the standalone installer (see LAUNCH.md);
+# Docker is here mainly for a hosted/shareable server. Commands:
+#   docker compose up -d    # start (rebuilds if needed), stays up, auto-restarts
+#   docker compose logs -f  # watch logs
+#   docker compose down     # stop
+# Then open http://localhost:8501
+#
+# DATA ACCESS: a container can't see host drive letters. MOUNT your data folder below and, in the
+# app sidebar, use the CONTAINER path (right-hand side, e.g. /data/experiment) as the experiment
+# folder. Windows network drives generally do NOT mount into Docker — run the standalone installer
+# for network-drive data, or mount the SMB share directly (see the commented 'volumes' block).
+services:
+  planteye:
+    build: .
+    image: planteye
+    container_name: planteye
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    environment:
+      - PLANTEYE_DEFAULT_FOLDER=/data/experiment
+    volumes:
+      # host path : container path : mode  — EDIT the host path to YOUR data folder
+      - "/path/to/your/data:/data/experiment:ro"
+      - "./out:/app/out"        # exports / cleaned .ply written here on the host
+      # To mount a network SMB share directly, uncomment this and the 'volumes:' block below,
+      # and create a .env with SMB_USER / SMB_PASS / SMB_DOMAIN (keep .env out of git):
+      # - "netshare:/data/experiment:ro"
+
+# volumes:
+#   netshare:
+#     driver: local
+#     driver_opts:
+#       type: cifs
+#       device: "//SERVER/SHARE/path/to/experiment"
+#       o: "username=${SMB_USER},password=${SMB_PASS},domain=${SMB_DOMAIN},vers=3.0,ro,uid=1000,gid=1000"

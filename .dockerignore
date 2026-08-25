@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+docs/
+out/
+cleaned_ply/
+*.ply
+*.zip
+*.csv
+*.xlsx
+*.docx
+*.pdf
+.streamlit/
