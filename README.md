@@ -31,12 +31,36 @@ Download the latest build for your OS from the **[Releases](../../releases)** pa
 | OS | Download | How to run |
 |---|---|---|
 | **Windows** | `PlantEye-Setup.exe` (installer) | Run it → Start-menu / desktop shortcut |
-| **macOS** | `PlantEye-macOS-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
-| **Linux** | `PlantEye-Linux-portable.zip` | Unzip → `./PlantEye/PlantEye` |
+| **macOS (Apple Silicon)** | `PlantEye-macOS-arm64-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
+| **macOS (Intel)** | `PlantEye-macOS-x64-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
+| **Linux** | `PlantEye-Linux-x64-portable.zip` | Unzip → `./PlantEye/PlantEye` |
 
 The app opens in your browser at `http://localhost:8501`. It runs on your own machine, so it reads
 your local and network-drive data directly. (First launch on Windows/macOS may warn about an
 unidentified developer — see `PUBLISHING.md` for code-signing/notarization notes.)
+
+## System requirements
+
+**To run the app (end users):**
+- **OS:** Windows 10/11 (64-bit) · macOS 12+ (both Apple Silicon and Intel builds are provided) ·
+  Linux 64-bit with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+, or newer).
+- **CPU:** any 64-bit x86-64 processor; Apple Silicon Macs use the native `arm64` build.
+- **RAM:** 8 GB minimum; **16 GB recommended** for 3D point-cloud viewing/cleaning and batch processing.
+- **Disk:** ~350 MB for the installed app, plus room for your data and cleaned/exported files.
+- **Browser:** the app opens in your default browser (Chrome, Edge, Firefox, or Safari); a
+  1280×800 or larger window is comfortable.
+- **GPU:** not required (CPU only). **Internet:** not required to run — only to download the app.
+- **Network:** uses local port `8501` (falls back to the next free port). Network-drive data needs
+  the drive mapped/reachable on your machine (VPN/campus as applicable).
+
+**To run from source (developers):** Python 3.12+ with the packages in `requirements.txt`.
+
+**To build the standalone apps (maintainers):** Python 3.12 + PyInstaller (+ Inno Setup on Windows),
+or just use the GitHub Actions workflow. See `packaging/README.md`.
+
+**Input data it accepts:** TraitFinder tabular exports (`*_PlantEye.csv` or `.zip`); optionally
+binary PlantEye `.ply` point clouds, an `.xlsx` design workbook, and an `.xlsx` manual-measurements
+workbook. No data is bundled — you point the app at your own folders.
 
 ## Run from source (developers)
 ```bash

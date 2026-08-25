@@ -17,7 +17,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest        # Windows 10/11, x64
+            label: Windows-x64
+          - os: macos-latest          # macOS, Apple Silicon (arm64)
+            label: macOS-arm64
+          - os: macos-13              # macOS, Intel (x86_64)
+            label: macOS-x64
+          - os: ubuntu-22.04          # Linux, x64 — glibc 2.35 floor (runs on more distros)
+            label: Linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,16 +48,16 @@ jobs:
         run: |
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a -tzip "PlantEye-${{ runner.os }}-portable.zip" PlantEye >/dev/null
+            7z a -tzip "PlantEye-${{ matrix.label }}-portable.zip" PlantEye >/dev/null
           else
-            zip -qr "PlantEye-${{ runner.os }}-portable.zip" PlantEye
+            zip -qr "PlantEye-${{ matrix.label }}-portable.zip" PlantEye
           fi
 
       - name: Upload portable zip
         uses: actions/upload-artifact@v4
         with:
-          name: PlantEye-${{ runner.os }}-portable
-          path: dist/PlantEye-${{ runner.os }}-portable.zip
+          name: PlantEye-${{ matrix.label }}-portable
+          path: dist/PlantEye-${{ matrix.label }}-portable.zip
 
       # ---- Windows: build the Inno Setup installer ----
       - name: Build Windows installer (Inno Setup)
@@ -74,5 +82,5 @@ jobs:
         with:
           fail_on_unmatched_files: false   # the installer path exists only on Windows
           files: |
-            dist/PlantEye-${{ runner.os }}-portable.zip
+            dist/PlantEye-${{ matrix.label }}-portable.zip
             packaging/Output/PlantEye-Setup.exe
