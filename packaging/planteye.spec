@@ -6,6 +6,10 @@ from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.getcwd()  # PlantEyePipeline
 
+# macOS multi-arch: CI sets PYI_TARGET_ARCH=universal2 (after fusing universal2 wheels) so one
+# build runs natively on both Apple Silicon and Intel. Unset on Windows/Linux → native build.
+TARGET_ARCH = os.environ.get("PYI_TARGET_ARCH") or None
+
 datas, binaries, hiddenimports = [], [], []
 
 # Streamlit (and altair) must be collected wholesale — code, data files, and metadata.
@@ -57,5 +61,6 @@ exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True, name="PlantEye",
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     console=True,  # keep a console so users/we can see logs & errors (flip to False later)
+    target_arch=TARGET_ARCH,  # 'universal2' on macOS CI; None (native) elsewhere
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PlantEye")

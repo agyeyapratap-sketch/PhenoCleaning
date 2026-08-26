@@ -34,10 +34,8 @@ Download the latest build for your OS from the **[Releases](../../releases)** pa
 | OS | Download | How to run |
 |---|---|---|
 | **Windows** | `PlantEye-Setup.exe` (installer) | Run it → Start-menu / desktop shortcut |
-| **macOS (Apple Silicon)** | `PlantEye-macOS-arm64-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
+| **macOS (Apple Silicon *or* Intel)** | `PlantEye-macOS-universal2-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
 | **Linux** | `PlantEye-Linux-x64-portable.zip` | Unzip → `./PlantEye/PlantEye` |
-
-*(Intel Macs: run from source — see below. A prebuilt Intel binary isn't shipped because those CI runners are unreliable.)*
 
 The app opens in your browser at `http://localhost:8501`. It runs on your own machine, so it reads
 your local and network-drive data directly. (First launch on Windows/macOS may warn about an
@@ -46,9 +44,9 @@ unidentified developer — see `PUBLISHING.md` for code-signing/notarization not
 ## System requirements
 
 **To run the app (end users):**
-- **OS:** Windows 10/11 (64-bit) · macOS 12+ on Apple Silicon (Intel Macs: run from source) ·
-  Linux 64-bit with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+, or newer).
-- **CPU:** Windows/Linux any 64-bit x86-64 processor; Macs use the native Apple-Silicon `arm64` build.
+- **OS:** Windows 10/11 (64-bit) · macOS 12+ (a single **universal2** build runs natively on both
+  Apple Silicon and Intel) · Linux 64-bit with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+).
+- **CPU:** Windows/Linux any 64-bit x86-64 processor; macOS runs natively on Apple Silicon and Intel.
 - **RAM:** 8 GB minimum; **16 GB recommended** for 3D point-cloud viewing/cleaning and batch processing.
 - **Disk:** ~350 MB for the installed app, plus room for your data and cleaned/exported files.
 - **Browser:** the app opens in your default browser (Chrome, Edge, Firefox, or Safari); a

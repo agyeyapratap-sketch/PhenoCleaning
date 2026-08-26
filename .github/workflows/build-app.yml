@@ -20,14 +20,14 @@ jobs:
         include:
           - os: windows-latest        # Windows 10/11, x64
             label: Windows-x64
-          - os: macos-latest          # macOS, Apple Silicon (arm64) — covers all Macs sold since 2023
-            label: macOS-arm64
+          - os: macos-latest          # macOS — ONE universal2 build, native on both Apple Silicon & Intel
+            label: macOS-universal2
           - os: ubuntu-22.04          # Linux, x64 — glibc 2.35 floor (runs on more distros)
             label: Linux-x64
-          # NOTE: the Intel-Mac leg (os: macos-13) was removed — those runners can queue for the
-          # full 24h await-runner limit and get cancelled, which fails the whole run. Apple stopped
-          # selling Intel Macs in 2023; Intel users can run from source. To restore coverage, prefer
-          # a universal2 build on macos-latest over re-adding a scarce macos-13 runner.
+          # NOTE: Intel Macs are covered by the universal2 build on the (reliable) macos-latest
+          # arm64 runner — NOT by a separate os: macos-13 leg, whose runners can queue for the full
+          # 24h await-runner limit and get cancelled. Because numpy/scipy/pandas/pyarrow ship no
+          # universal2 wheels, the macOS step below fuses arm64+x86_64 wheels (delocate) first.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60             # a hung build step fails fast instead of tying up a runner
     steps:
@@ -37,12 +37,35 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Windows/Linux: straight install. macOS is handled by the universal2 step below.
       - name: Install dependencies
+        if: runner.os != 'macOS'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # macOS: build one universal2 app (native on Apple Silicon AND Intel). The scientific stack
+      # ships no universal2 wheels, so download both single-arch wheel sets and fuse each pair.
+      - name: Install dependencies (macOS — fuse universal2 wheels)
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install --upgrade pip "delocate>=0.11" pyinstaller
+          echo "Interpreter architectures (must include x86_64 AND arm64 for a true universal2 build):"
+          lipo -info "$(python -c 'import sys; print(sys.base_prefix)')/Python.framework/Versions/3.12/Python" 2>/dev/null \
+            || lipo -archs "$(python -c 'import sysconfig,os; print(os.path.join(sysconfig.get_config_var("installed_base"),"bin","python3.12"))')" 2>/dev/null \
+            || echo "  (could not introspect interpreter arch; continuing)"
+          rm -rf w_arm w_x86 w_uni; mkdir -p w_arm w_x86 w_uni
+          pip download -r requirements.txt --only-binary=:all: --python-version 3.12 \
+            --platform macosx_11_0_arm64  -d w_arm
+          pip download -r requirements.txt --only-binary=:all: --python-version 3.12 \
+            --platform macosx_10_13_x86_64 -d w_x86
+          python packaging/fuse_universal2.py w_arm w_x86 w_uni
+          pip install w_uni/*.whl
+
       - name: Build standalone app (PyInstaller)
+        env:
+          # universal2 on macOS (deps were fused above); empty → native build on Windows/Linux
+          PYI_TARGET_ARCH: ${{ runner.os == 'macOS' && 'universal2' || '' }}
         run: pyinstaller packaging/planteye.spec --noconfirm
 
       # ---- portable zip of the one-folder build (all OSes) ----
