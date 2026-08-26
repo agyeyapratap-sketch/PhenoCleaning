@@ -34,6 +34,7 @@ Download the latest build for your OS from the **[Releases](../../releases)** pa
 | OS | Download | How to run |
 |---|---|---|
 | **Windows** | `PlantEye-Setup.exe` (installer) | Run it → Start-menu / desktop shortcut |
+| **Windows (no install)** | `PlantEye-Windows-x64-portable.zip` | Unzip → run `PlantEye\PlantEye.exe` |
 | **macOS (Apple Silicon *or* Intel)** | `PlantEye-macOS-universal2-portable.zip` | Unzip → right-click `PlantEye` → **Open** (first time) |
 | **Linux** | `PlantEye-Linux-x64-portable.zip` | Unzip → `./PlantEye/PlantEye` |
 
