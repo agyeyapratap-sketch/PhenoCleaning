@@ -45,9 +45,19 @@ def main():
             shutil.copy(w, out_dir); pure += 1
         elif "universal2" in name:             # some deps already ship a fat wheel
             shutil.copy(w, out_dir); already += 1
-        elif _prefix(w) in x86:                # the common case: merge the arm64/x86_64 pair
-            subprocess.check_call(["delocate-merge", w, x86[_prefix(w)], "-w", out_dir])
-            merged += 1
+        elif _prefix(w) in x86:
+            x86_wheel = x86[_prefix(w)]
+            if "universal2" in os.path.basename(x86_wheel):
+                # The wheel pip picked for the x86_64 target is itself already universal2 — some
+                # packages (e.g. httptools) ship only arm64 + universal2, with no x86_64-only wheel.
+                # Merging an arm64-thin wheel with an already-fat one makes `lipo` fail on the
+                # duplicate arm64 slice, so just use the fat wheel — it already has both arches.
+                shutil.copy(x86_wheel, out_dir); already += 1
+                print(f"  INFO: {name}: x86_64 counterpart is already universal2 — used as-is",
+                      file=sys.stderr)
+            else:                              # the common case: merge the arm64/x86_64 pair
+                subprocess.check_call(["delocate-merge", w, x86_wheel, "-w", out_dir])
+                merged += 1
         else:                                  # no x86_64 counterpart — copy, best effort
             shutil.copy(w, out_dir); single += 1
             print(f"  WARN: no x86_64 match for {name} — copied arm64-only "
