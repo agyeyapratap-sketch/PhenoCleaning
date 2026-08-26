@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM  PlantEye pipeline - one-click launcher (Windows, no Docker needed)
+REM  PhenoCleaning - one-click launcher (Windows, no Docker needed)
 REM  Double-click this file, or run it from a terminal. Leave the window OPEN
 REM  while you use the app; close it (or press Ctrl+C) to stop the app.
 REM ============================================================================
@@ -9,7 +9,7 @@ cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 
 echo.
-echo   Starting the PlantEye pipeline app...
+echo   Starting PhenoCleaning...
 echo   A browser tab should open automatically at http://localhost:8501
 echo   (if not, open that address yourself).
 echo.

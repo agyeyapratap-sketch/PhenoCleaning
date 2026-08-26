@@ -10,10 +10,10 @@
 # folder. Windows network drives generally do NOT mount into Docker — run the standalone installer
 # for network-drive data, or mount the SMB share directly (see the commented 'volumes' block).
 services:
-  planteye:
+  phenocleaning:
     build: .
-    image: planteye
-    container_name: planteye
+    image: phenocleaning
+    container_name: phenocleaning
     ports:
       - "8501:8501"
     restart: unless-stopped

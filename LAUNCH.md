@@ -1,4 +1,4 @@
-# Launching the PlantEye pipeline app
+# Launching the PhenoCleaning app
 
 Two ways to run it as a **relaunchable** app. Both keep it running until *you* stop it.
 
@@ -38,8 +38,8 @@ docker compose down           # stop
 Or without compose:
 
 ```powershell
-docker build -t planteye .
-docker run --rm -p 8501:8501 -v "/path/to/your/data:/data/experiment:ro" -e PLANTEYE_DEFAULT_FOLDER=/data/experiment planteye
+docker build -t phenocleaning .
+docker run --rm -p 8501:8501 -v "/path/to/your/data:/data/experiment:ro" -e PLANTEYE_DEFAULT_FOLDER=/data/experiment phenocleaning
 ```
 
 ### Data access inside Docker — read this

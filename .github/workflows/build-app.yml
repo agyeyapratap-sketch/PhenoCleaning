@@ -67,15 +67,15 @@ jobs:
         env:
           # universal2 on macOS (deps were fused above); empty → native build on Windows/Linux
           PYI_TARGET_ARCH: ${{ runner.os == 'macOS' && 'universal2' || '' }}
-        run: pyinstaller packaging/planteye.spec --noconfirm
+        run: pyinstaller packaging/phenocleaning.spec --noconfirm
 
       # Confirm the macOS build is genuinely universal2 (both arch slices present), not silently arm64-only.
       - name: Verify universal2 slices (macOS)
         if: runner.os == 'macOS'
         run: |
-          echo "Main executable:"; lipo -archs dist/PlantEye/PlantEye || true
+          echo "Main executable:"; lipo -archs dist/PhenoCleaning/PhenoCleaning || true
           echo "A bundled C-extension (numpy):"
-          find dist/PlantEye -name "*.so" -path "*numpy*" | head -1 | xargs -I{} lipo -archs {} || true
+          find dist/PhenoCleaning -name "*.so" -path "*numpy*" | head -1 | xargs -I{} lipo -archs {} || true
 
       # ---- portable zip of the one-folder build (all OSes) ----
       - name: Package portable zip
@@ -83,16 +83,16 @@ jobs:
         run: |
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a -tzip "PlantEye-${{ matrix.label }}-portable.zip" PlantEye >/dev/null
+            7z a -tzip "PhenoCleaning-${{ matrix.label }}-portable.zip" PhenoCleaning >/dev/null
           else
-            zip -qr "PlantEye-${{ matrix.label }}-portable.zip" PlantEye
+            zip -qr "PhenoCleaning-${{ matrix.label }}-portable.zip" PhenoCleaning
           fi
 
       - name: Upload portable zip
         uses: actions/upload-artifact@v5
         with:
-          name: PlantEye-${{ matrix.label }}-portable
-          path: dist/PlantEye-${{ matrix.label }}-portable.zip
+          name: PhenoCleaning-${{ matrix.label }}-portable
+          path: dist/PhenoCleaning-${{ matrix.label }}-portable.zip
 
       # ---- Windows: build the Inno Setup installer ----
       - name: Build Windows installer (Inno Setup)
@@ -106,8 +106,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v5
         with:
-          name: PlantEye-Windows-Installer
-          path: packaging/Output/PlantEye-Setup.exe
+          name: PhenoCleaning-Windows-Installer
+          path: packaging/Output/PhenoCleaning-Setup.exe
 
       # ---- attach to the Release (when triggered by publishing one) ----
       - name: Attach artifacts to Release
@@ -117,5 +117,5 @@ jobs:
         with:
           fail_on_unmatched_files: false   # the installer path exists only on Windows
           files: |
-            dist/PlantEye-${{ matrix.label }}-portable.zip
-            packaging/Output/PlantEye-Setup.exe
+            dist/PhenoCleaning-${{ matrix.label }}-portable.zip
+            packaging/Output/PhenoCleaning-Setup.exe

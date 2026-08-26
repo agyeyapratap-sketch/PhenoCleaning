@@ -1,6 +1,6 @@
-"""Frozen entry point for the PlantEye pipeline app (built with PyInstaller).
+"""Frozen entry point for the PhenoCleaning app (built with PyInstaller).
 
-Non-coders double-click the resulting PlantEye.exe; this boots the Streamlit server in-process
+Non-coders double-click the resulting PhenoCleaning.exe; this boots the Streamlit server in-process
 and opens the browser automatically. Because it runs natively, it reads local and network-drive
 data directly.
 """
@@ -41,7 +41,7 @@ def main() -> None:
 
     threading.Thread(target=_open_browser_when_ready, daemon=True).start()
 
-    print("\n  PlantEye is starting — a browser tab will open at", URL)
+    print("\n  PhenoCleaning is starting — a browser tab will open at", URL)
     print("  Keep this window open while you work; close it to stop the app.\n")
 
     sys.argv = [

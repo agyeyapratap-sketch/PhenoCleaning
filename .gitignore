@@ -10,7 +10,7 @@ env/
 build/
 dist/
 *.manifest
-# NOTE: packaging/planteye.spec IS committed — it is the build recipe.
+# NOTE: packaging/phenocleaning.spec IS committed — it is the build recipe.
 
 # ── Inno Setup installer output ──────────────────────────────────────────────
 packaging/Output/

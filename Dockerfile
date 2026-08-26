@@ -1,6 +1,6 @@
-# PlantEye pipeline — containerised, relaunchable app
-# Build:  docker build -t planteye .
-# Run:    docker run --rm -p 8501:8501 -v /path/to/your/data:/data:ro planteye
+# PhenoCleaning — containerised, relaunchable app
+# Build:  docker build -t phenocleaning .
+# Run:    docker run --rm -p 8501:8501 -v /path/to/your/data:/data:ro phenocleaning
 # (or use docker-compose.yml, which also auto-restarts)
 FROM python:3.12-slim
 

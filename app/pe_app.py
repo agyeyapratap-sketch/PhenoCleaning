@@ -1,4 +1,4 @@
-"""PlantEye pipeline — interactive app (v3, design-agnostic).
+"""PhenoCleaning — interactive app (v3, design-agnostic).
 
 Run:  streamlit run app/pe_app.py
 
@@ -28,7 +28,7 @@ import pe_data
 import pe_design
 import pe_qc
 
-st.set_page_config(page_title="PlantEye pipeline", layout="wide", page_icon="🌱")
+st.set_page_config(page_title="PhenoCleaning", layout="wide", page_icon="🌱")
 
 SS = st.session_state
 for k, v in dict(insts=None, union=None, base_union=None, candidates=None, design=None,
@@ -88,7 +88,7 @@ def row_scan_key(r):
 
 
 # =========================================================================== sidebar
-st.sidebar.title("🌱 PlantEye pipeline")
+st.sidebar.title("🌱 PhenoCleaning")
 st.sidebar.caption("ingest · explore · combine · curate · check · analyse — for any design")
 
 # A convenience default folder can be set locally via the PLANTEYE_DEFAULT_FOLDER environment
@@ -134,7 +134,7 @@ if SS.insts:
         st.sidebar.caption(f"✎ {len(SS.decisions)} curation decision(s) applied")
 
 # =========================================================================== main
-st.title("PlantEye pipeline")
+st.title("PhenoCleaning")
 
 if not SS.insts:
     st.info("Enter your **experiment folder** in the sidebar and press **Discover exports**. "
@@ -851,17 +851,17 @@ with tabs[9]:
         u = SS.union.copy()
         u["days_elapsed"] = (u["date"] - u["date"].min()).dt.days
         st.download_button("⬇ combined scans (tidy CSV)", u.to_csv(index=False).encode("utf-8"),
-                           "planteye_combined.csv", "text/csv", width="stretch")
+                           "phenocleaning_combined.csv", "text/csv", width="stretch")
         if SS.gt_join is not None:
             st.download_button("⬇ manual-measurement join (per pot)",
                                SS.gt_join.to_csv(index=False).encode("utf-8"),
-                               "planteye_groundtruth.csv", "text/csv", width="stretch")
+                               "phenocleaning_groundtruth.csv", "text/csv", width="stretch")
         if SS.decisions:
             dec = pd.DataFrame([{"source_instance": k[0], "unit": k[1], "timestamp": k[2], **v}
                                 for k, v in SS.decisions.items()])
             st.download_button("⬇ curation decisions (CSV)", dec.to_csv(index=False).encode("utf-8"),
-                               "planteye_decisions.csv", "text/csv", width="stretch")
+                               "phenocleaning_decisions.csv", "text/csv", width="stretch")
         st.markdown("**Provenance / audit log** — every combine, factor, and curation decision:")
         st.code("\n".join(SS.audit) or "(empty)", language="text")
         st.download_button("⬇ audit log", ("\n".join(SS.audit)).encode("utf-8"),
-                           "planteye_audit.txt", "text/plain")
+                           "phenocleaning_audit.txt", "text/plain")

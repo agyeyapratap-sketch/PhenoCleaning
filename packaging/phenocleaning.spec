@@ -1,6 +1,6 @@
-# PyInstaller spec — PlantEye pipeline standalone app (one-folder build).
-# Build from the PlantEyePipeline folder:  pyinstaller packaging/planteye.spec --noconfirm
-# Output: dist/PlantEye/PlantEye.exe  (ship the whole dist/PlantEye folder, or an installer)
+# PyInstaller spec — PhenoCleaning standalone app (one-folder build).
+# Build from the PlantEyePipeline folder:  pyinstaller packaging/phenocleaning.spec --noconfirm
+# Output: dist/PhenoCleaning/PhenoCleaning.exe  (ship the whole dist/PhenoCleaning folder, or an installer)
 import os
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
@@ -58,9 +58,9 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, [], exclude_binaries=True, name="PlantEye",
+    pyz, a.scripts, [], exclude_binaries=True, name="PhenoCleaning",
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     console=True,  # keep a console so users/we can see logs & errors (flip to False later)
     target_arch=TARGET_ARCH,  # 'universal2' on macOS CI; None (native) elsewhere
 )
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PlantEye")
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PhenoCleaning")

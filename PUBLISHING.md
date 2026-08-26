@@ -9,10 +9,10 @@ cross-compiled).
 
 ## 0. Before you publish (read once)
 
-- **Pick a name.** "PlantEye" is Phenospex's product name. For a public release, consider a
-  distinct name (e.g. *PhenoAudit*, *CanopyFlow*, *ScanReconcile*). Renaming touches `README.md`,
-  `CITATION.cff`, `packaging/installer.iss`, `packaging/planteye.spec` (the `name=` and exe), and
-  the app title in `app/pe_app.py`. Ask and it can be renamed in one pass.
+- **The app is named PhenoCleaning.** "PlantEye" is Phenospex's product name, so this tool ships
+  under the distinct name **PhenoCleaning**. That name appears in `README.md`,
+  `CITATION.cff`, `packaging/installer.iss`, `packaging/phenocleaning.spec` (the `name=` and exe), and
+  the app title in `app/pe_app.py`.
 - **Data is already excluded.** `.gitignore` keeps out all data (`*.ply/*.zip/*.xlsx/*.csv`), the
   unpublished `docs/` PDF, dev-only scripts, and build outputs. Institutional paths were removed
   from the code. Nothing private should be committed — verify in step 3.
@@ -84,8 +84,8 @@ git push -u origin main
 **Option A — build now to test:**
 1. On your repo page: **Actions** tab → **Build apps** → **Run workflow** → **Run**.
 2. Wait ~5–10 min. Open the finished run → **Artifacts** → download:
-   - `PlantEye-Windows-Installer` (the `PlantEye-Setup.exe` installer)
-   - `PlantEye-Windows-portable`, `PlantEye-macOS-portable`, `PlantEye-Linux-portable` (zips)
+   - `PhenoCleaning-Windows-Installer` (the `PhenoCleaning-Setup.exe` installer)
+   - `PhenoCleaning-Windows-portable`, `PhenoCleaning-macOS-portable`, `PhenoCleaning-Linux-portable` (zips)
 
 **Option B — publish a Release (recommended for real distribution):**
 1. Repo page → **Releases** → **Draft a new release**.
@@ -99,10 +99,10 @@ git push -u origin main
 If you'd rather not use CI for Windows:
 ```powershell
 # 1) build the app (short output path avoids Windows' 260-char limit)
-pyinstaller packaging\planteye.spec --noconfirm
+pyinstaller packaging\phenocleaning.spec --noconfirm
 # 2) compile the installer
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
-# -> packaging\Output\PlantEye-Setup.exe
+# -> packaging\Output\PhenoCleaning-Setup.exe
 ```
 
 ---

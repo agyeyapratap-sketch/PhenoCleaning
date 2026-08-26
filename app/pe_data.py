@@ -1,4 +1,4 @@
-"""Data layer for the PlantEye pipeline app.
+"""Data layer for the PhenoCleaning app.
 
 Wraps the verified reader in ``tools/planteye_io.py`` and adds the things the app needs on
 top of a single tabular export, kept **design-agnostic**: blank detection, discovery of the

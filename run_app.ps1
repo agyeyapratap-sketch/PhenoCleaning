@@ -1,4 +1,4 @@
-# PlantEye pipeline - one-click launcher (PowerShell, no Docker needed)
+# PhenoCleaning - one-click launcher (PowerShell, no Docker needed)
 # Run:  powershell -ExecutionPolicy Bypass -File run_app.ps1
 # Keep this window open while you use the app; press Ctrl+C to stop.
 
@@ -13,7 +13,7 @@ if (-not $py) {
 }
 
 Write-Host ""
-Write-Host "  Starting the PlantEye pipeline app..." -ForegroundColor Green
+Write-Host "  Starting PhenoCleaning..." -ForegroundColor Green
 Write-Host "  A browser tab should open at http://localhost:8501 (open it yourself if not)."
 Write-Host "  Keep this window open while you work. Press Ctrl+C to stop."
 Write-Host ""

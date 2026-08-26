@@ -1,4 +1,4 @@
-# PlantEye pipeline app — pinned dependencies (verified working set)
+# PhenoCleaning — pinned dependencies (verified working set)
 streamlit==1.59.2
 numpy==2.5.1
 pandas==3.0.3

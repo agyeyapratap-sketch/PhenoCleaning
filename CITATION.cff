@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "PlantEye Pipeline: an auditable pipeline for 3D multispectral plant-phenotyping time-series"
+title: "PhenoCleaning: an auditable pipeline for 3D multispectral plant-phenotyping time-series"
 abstract: >-
   An auditable, design-agnostic pipeline that turns the raw outputs of a Phenospex PlantEye /
   TraitFinder scanner (tabular exports and 3D point clouds) into a clean, quality-controlled,
@@ -15,7 +15,7 @@ authors:
     affiliation: "Australian Plant Phenomics Network, The University of Western Australia"
 version: "1.0.0"
 license: MIT
-repository-code: "https://github.com/USERNAME/REPO"
+repository-code: "https://github.com/agyeyapratap-sketch/planteye-pipeline"
 keywords:
   - plant phenotyping
   - PlantEye

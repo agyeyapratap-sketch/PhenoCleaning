@@ -1,4 +1,4 @@
-# PlantEye pipeline — app (v3, design-agnostic + curation)
+# PhenoCleaning — app (v3, design-agnostic + curation)
 
 Turns the raw TraitFinder exports of **any** PlantEye experiment — even when one experiment
 was exported as several overlapping files — into one clean, checked, analysis-ready dataset.

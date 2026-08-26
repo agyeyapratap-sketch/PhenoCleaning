@@ -1,11 +1,11 @@
-# Building the standalone PlantEye app (no Python needed by users)
+# Building the standalone PhenoCleaning app (no Python needed by users)
 
 Produces a **double-click application** for non-coders — no Python install, no terminal.
 Because it runs natively, it reads local **and network-drive** data directly (unlike Docker).
 
 Files here:
 - `launcher.py` — the app entry point that boots Streamlit and opens the browser.
-- `planteye.spec` — the PyInstaller recipe (bundles the app + scientific stack, excludes torch etc.).
+- `phenocleaning.spec` — the PyInstaller recipe (bundles the app + scientific stack, excludes torch etc.).
 
 ---
 
@@ -15,15 +15,15 @@ From the `PlantEyePipeline` folder, with the deps installed
 (`pip install -r requirements.txt pyinstaller`):
 
 ```powershell
-pyinstaller packaging\planteye.spec --noconfirm
+pyinstaller packaging\phenocleaning.spec --noconfirm
 ```
 
 > If you hit `WinError 206: filename too long`, build to a short path:
-> `pyinstaller packaging\planteye.spec --noconfirm --distpath C:\Users\<you>\pe_dist --workpath C:\Users\<you>\pe_build`
+> `pyinstaller packaging\phenocleaning.spec --noconfirm --distpath C:\Users\<you>\pe_dist --workpath C:\Users\<you>\pe_build`
 > (Windows' 260-char path limit + a long project path is the cause. Keep the output near the drive root.)
 
-**Output:** `dist\PlantEye\` — a ~300 MB folder. Users run **`PlantEye.exe`** inside it.
-To distribute: zip the whole `PlantEye` folder and send it (they unzip and double-click the exe).
+**Output:** `dist\PhenoCleaning\` — a ~300 MB folder. Users run **`PhenoCleaning.exe`** inside it.
+To distribute: zip the whole `PhenoCleaning` folder and send it (they unzip and double-click the exe).
 
 Keep the built folder **outside OneDrive** (don't let 300 MB sync). A great next step for a polished
 installer with a Start-menu shortcut is **Inno Setup** wrapping this folder — ask and I'll add it.
@@ -40,7 +40,7 @@ zips each, and (when you publish a GitHub Release) attaches all three to it.
 
 1. Push this project to GitHub.
 2. **Actions → Build standalone apps → Run workflow** (or publish a Release).
-3. Download `PlantEye-Windows.zip`, `PlantEye-macOS.zip`, `PlantEye-Linux.zip` from the run's artifacts
+3. Download `PhenoCleaning-Windows.zip`, `PhenoCleaning-macOS.zip`, `PhenoCleaning-Linux.zip` from the run's artifacts
    (or the Release).
 
 ### Platform notes
@@ -56,4 +56,4 @@ zips each, and (when you publish a GitHub Release) attaches all three to it.
 The spec **excludes** `torch`, `tensorflow`, `jax`, `IPython`/notebook, and GUI toolkits — they may be
 installed on your dev machine but the app never uses them, and torch in particular broke the Windows
 build with over-long paths. If you add a feature that needs a new library, add it to `requirements.txt`
-and (if PyInstaller misses it) to `hiddenimports` in `planteye.spec`, then rebuild.
+and (if PyInstaller misses it) to `hiddenimports` in `phenocleaning.spec`, then rebuild.
