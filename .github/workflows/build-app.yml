@@ -20,13 +20,16 @@ jobs:
         include:
           - os: windows-latest        # Windows 10/11, x64
             label: Windows-x64
-          - os: macos-latest          # macOS, Apple Silicon (arm64)
+          - os: macos-latest          # macOS, Apple Silicon (arm64) — covers all Macs sold since 2023
             label: macOS-arm64
-          - os: macos-13              # macOS, Intel (x86_64)
-            label: macOS-x64
           - os: ubuntu-22.04          # Linux, x64 — glibc 2.35 floor (runs on more distros)
             label: Linux-x64
+          # NOTE: the Intel-Mac leg (os: macos-13) was removed — those runners can queue for the
+          # full 24h await-runner limit and get cancelled, which fails the whole run. Apple stopped
+          # selling Intel Macs in 2023; Intel users can run from source. To restore coverage, prefer
+          # a universal2 build on macos-latest over re-adding a scarce macos-13 runner.
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60             # a hung build step fails fast instead of tying up a runner
     steps:
       - uses: actions/checkout@v5
 
