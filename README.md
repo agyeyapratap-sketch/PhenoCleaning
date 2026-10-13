@@ -4,9 +4,6 @@ An auditable, design-agnostic pipeline for turning the raw outputs of a Phenospe
 TraitFinder** phenotyping scanner (tabular exports + 3D `.ply` point clouds) into one clean,
 quality-checked, analysis-ready dataset — with the scientist in control of every decision.
 
-> **Naming note:** "PlantEye" is a product name of Phenospex. PhenoCleaning is an independent, third-party
-> tool for working with PlantEye data and is not affiliated with or endorsed by Phenospex.
-
 ## Why
 High-throughput phenotyping produces data faster than it can be checked, and silent data-handling
 errors (imputed missing occasions, mislabelled duplicate exports, irregular timing treated as
