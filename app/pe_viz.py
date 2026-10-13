@@ -159,17 +159,25 @@ def load_plant(row, position: int | None):
     return verts[m], faces
 
 
-def plant_options(inventory: pd.DataFrame, tabular: pd.DataFrame | None) -> pd.DataFrame:
+def plant_options(inventory: pd.DataFrame, tabular: pd.DataFrame | None,
+                  status: pd.DataFrame | None = None) -> pd.DataFrame:
     """Every plant that has at least one 3D scan: block, position, label (with genotype /
-    treatment when the export is loaded), and how many dates it was scanned on."""
-    recs = []
-    for _, r in inventory.iterrows():
-        if r["kind"] == "unitfile":
-            recs.append((int(r["block"]), int(r["unit_n"]), r["local"]))
-        else:
-            for p in range(1, 5):
-                recs.append((int(r["block"]), p, r["local"]))
-    d = pd.DataFrame(recs, columns=["block", "position", "local"])
+    treatment when the export is loaded), and how many dates it was scanned on. With ``status``
+    (from :func:`pe_data.ply_status`) only scans that survive the cleaning count."""
+    if status is not None:
+        ok = status[status["status"] != "excluded"]
+        d = ok[["block", "position", "local"]].copy()
+    else:
+        recs = []
+        for _, r in inventory.iterrows():
+            if r["kind"] == "unitfile":
+                recs.append((int(r["block"]), int(r["unit_n"]), r["local"]))
+            else:
+                for p in range(1, 5):
+                    recs.append((int(r["block"]), p, r["local"]))
+        d = pd.DataFrame(recs, columns=["block", "position", "local"])
+    if d.empty:
+        return pd.DataFrame(columns=["block", "position", "dates", "label"])
     d = d.groupby(["block", "position"]).agg(dates=("local", lambda s: s.dt.normalize().nunique())).reset_index()
     lab = {}
     if tabular is not None and len(tabular) and {"block", "position"} <= set(tabular.columns):
@@ -184,11 +192,16 @@ def plant_options(inventory: pd.DataFrame, tabular: pd.DataFrame | None) -> pd.D
     return d.reset_index(drop=True)
 
 
-def plant_series(inventory: pd.DataFrame, block: int, position: int, max_points: int = 40000):
-    """[(local time, points)] for one plant across every scan date, oldest first. One scan per
-    date (the latest, if a carrier was rescanned that day)."""
+def plant_series(inventory: pd.DataFrame, block: int, position: int, max_points: int = 40000,
+                 allowed_paths=None):
+    """[(local time, points)] for one plant across every scan date, oldest first. With
+    ``allowed_paths`` only those files are used (the scans kept by the cleaning); one scan per date
+    (the latest, if more than one remains)."""
     inv = inventory[inventory["block"] == block].copy()
     inv = inv[(inv["kind"] == "full") | (inv["unit_n"] == position)]
+    if allowed_paths is not None:
+        allowed = {str(a) for a in allowed_paths}
+        inv = inv[inv["path"].astype(str).isin(allowed)]
     inv = inv.sort_values("local").groupby(inv["local"].dt.normalize()).tail(1)
     out = []
     rng = np.random.default_rng(0)

@@ -107,8 +107,25 @@ def ply_inventory(folder: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def plant_series(folder: str, block: int, position: int):
-    return pe_viz.plant_series(ply_inventory(folder), block, position)
+def plant_series(folder: str, block: int, position: int, allowed: tuple):
+    return pe_viz.plant_series(ply_inventory(folder), block, position, allowed_paths=allowed)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def scan_status(folder: str, kept: pd.DataFrame, candidates: pd.DataFrame) -> pd.DataFrame:
+    """Which plant in which .ply survives the cleaning (kept / excluded / not in exports)."""
+    return pe_data.ply_status(ply_inventory(folder), kept, candidates)
+
+
+def current_status(folder: str) -> pd.DataFrame:
+    cand = SS.candidates if SS.candidates is not None else candidates_frame()
+    return scan_status(folder, clean_rows(), cand)
+
+
+def allowed_files(status: pd.DataFrame, block: int, position: int) -> tuple:
+    ok = status[(status["block"] == block) & (status["position"] == position)
+                & (status["status"] != "excluded")]
+    return tuple(sorted(ok["path"].astype(str).unique()))
 
 
 # =========================================================================== sidebar
@@ -203,9 +220,12 @@ with tabs[0]:
         for ts, s in sub.groupby("timestamp"):
             src = s["source_instance"].iloc[0] if "source_instance" in s else ""
             opts[f"{pd.Timestamp(ts):%H:%M:%S} — {s['unit'].nunique()} pots  [{src}]"] = ts
+        in_use = set(pd.to_datetime(SS.union.loc[(SS.union["block"] == block)
+                                                 & (SS.union["date"] == pd.Timestamp(date)), "timestamp"]))
+        current = next((i for i, ts in enumerate(opts.values()) if pd.Timestamp(ts) in in_use), 0)
         cc = st.columns([3, 1])
         choice = cc[0].radio(f"Carrier **{block}** scanned {len(opts)}× on **{date}** — keep:", list(opts),
-                             key=f"cr_{block}_{date}", horizontal=True)
+                             index=current, key=f"cr_{block}_{date}", horizontal=True)
         if cc[1].button("Keep", key=f"crbtn_{block}_{date}"):
             for _, r in sub[sub["timestamp"] == opts[choice]].iterrows():
                 set_decision(row_scan_key(r), "keep", note=f"carrier {block} {date}: keep {choice}")
@@ -285,7 +305,14 @@ with tabs[2]:
         st.info("No 3D `.ply` files found. They are searched for in the experiment folder, or set a "
                 "**3D .ply folder** under *More inputs* in the sidebar.")
     else:
-        plants = pe_viz.plant_options(inv, SS.union)
+        status = current_status(PLY_DIR)
+        plants = pe_viz.plant_options(inv, SS.union, status)
+        n_ex = int((status["status"] == "excluded").sum())
+        if n_ex:
+            st.caption(f"Showing the scans in your cleaned data — {n_ex} plant scan(s) left out "
+                       "(duplicates, blank pots or scans you dropped).")
+        series_of = lambda p: plant_series(PLY_DIR, int(p["block"]), int(p["position"]),
+                                           allowed_files(status, int(p["block"]), int(p["position"])))
         mode = st.radio("Show", ["One scan", "Growth over time", "Compare plants"], horizontal=True,
                         label_visibility="collapsed")
         menu = pe_viz.index_menu()
@@ -307,7 +334,7 @@ with tabs[2]:
             a1, a2 = st.columns(2)
             plab = a1.selectbox("Plant", names)
             p = pick(plab)
-            series = plant_series(PLY_DIR, int(p["block"]), int(p["position"]))
+            series = series_of(p)
             if not series:
                 st.warning("No points for this plant.")
             else:
@@ -334,7 +361,7 @@ with tabs[2]:
                              horizontal=True)
             if st.button("🎞 Make animation", type="primary"):
                 p = pick(plab)
-                series = plant_series(PLY_DIR, int(p["block"]), int(p["position"]))
+                series = series_of(p)
                 if len(series) < 2:
                     st.warning("This plant has fewer than two scan dates.")
                 else:
@@ -366,7 +393,7 @@ with tabs[2]:
                 groups = []
                 for lab in chosen:
                     p = pick(lab)
-                    groups.append((short(lab), plant_series(PLY_DIR, int(p["block"]), int(p["position"]))))
+                    groups.append((short(lab), series_of(p)))
                 name = f"compare_{len(chosen)}_plants_{key}.gif"
                 keep_anim(name, pe_viz.compare_gif(groups, key=key, view="top" if view == "Top view" else "side",
                                                    size=max(240, size // 2), fps=speed, bg=bg,
@@ -388,6 +415,35 @@ with tabs[3]:
                f"{'removed' if SS.remove_blanks else 'kept'}.")
     st.download_button("⬇ Cleaned scans (CSV)", u.to_csv(index=False).encode("utf-8"),
                        "phenocleaning_combined.csv", "text/csv", type="primary")
+    st.subheader("3D files")
+    inv_x = ply_inventory(PLY_DIR) if PLY_DIR and Path(PLY_DIR).exists() else pd.DataFrame()
+    if not len(inv_x):
+        st.caption("No 3D `.ply` files found for this experiment.")
+    else:
+        stx = current_status(PLY_DIR)
+        n_files = stx.groupby("path")["status"].apply(lambda s: (s == "kept").any())
+        st.caption(f"{int(n_files.sum())} of {len(n_files)} `.ply` file(s) hold plants in the cleaned "
+                   "dataset. Copy just those to a new folder — your original files are not touched.")
+        default_out = str(Path(PLY_DIR).parent / f"{Path(PLY_DIR).name}_cleaned_3d")
+        out_dir = st.text_input("Copy to folder", default_out)
+        if st.button("Copy kept 3D files"):
+            if Path(out_dir).resolve() == Path(PLY_DIR).resolve():
+                st.error("Choose a different folder from the original 3D folder.")
+            else:
+                bar = st.progress(0.0)
+                lst = pe_data.copy_kept_ply(stx, out_dir, progress=lambda f: bar.progress(min(f, 1.0)))
+                bar.empty()
+                SS["ply_copy"] = (out_dir, lst)
+                log(f"Copied {int(lst['copied'].sum())} kept .ply file(s) to {out_dir}; "
+                    f"{int((~lst['copied']).sum())} left out")
+        if SS.get("ply_copy"):
+            od, lst = SS["ply_copy"]
+            st.success(f"Copied {int(lst['copied'].sum())} file(s) to `{od}` — "
+                       f"{int((~lst['copied']).sum())} left out. The list is saved there as "
+                       "`ply_file_list.csv`.")
+            with st.expander("Which files were left out, and why"):
+                st.dataframe(lst[~lst["copied"]] if (~lst["copied"]).any() else lst,
+                             width="stretch", hide_index=True)
     if SS.anim:
         st.subheader("Animations made this session")
         for name, data in SS.anim.items():

@@ -22,7 +22,8 @@ Five tabs, kept deliberately simple:
   RGBVI, TGI, CIVE, hue, lightness, saturation, height). Animate it:
   a **turntable**, a plant **growing over time** (top, side or 3D), **spinning through time**, or
   **several plants side by side** in sync. One colour scale per animation; GIFs need no extra software.
-- **Export** — the cleaned dataset, every animation, and a log of every decision.
+- **Export** — the cleaned dataset, a copy of just the `.ply` files that match it (duplicates and
+  blank pots left out, with the reason for each), every animation, and a log of every decision.
 - **Advanced** — optional factors, quality and missing-data checks, outlier curation, design
   workbook and manual-measurement validation.
 

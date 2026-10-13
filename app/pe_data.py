@@ -40,7 +40,7 @@ __all__ = [
     "suggest_split", "split_compound",
     "Instance", "discover_instances", "instance_summary",
     "detect_supersession", "union_instances", "overlapping_records",
-    "scan_key", "carrier_rescans", "resolve_union", "discover_ply",
+    "scan_key", "carrier_rescans", "resolve_union", "discover_ply", "ply_status", "copy_kept_ply",
     "load_groundtruth", "join_groundtruth", "manual_measures",
 ]
 
@@ -485,6 +485,91 @@ def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
            .sort_values(["local", "block", "unit_n"], na_position="first")
            .reset_index(drop=True))
     return inv[cols]
+
+
+def ply_status(inventory: pd.DataFrame, kept: pd.DataFrame, candidates: pd.DataFrame,
+               tol_minutes: float = 1.0) -> pd.DataFrame:
+    """Match every plant in every `.ply` to the tabular data and say whether it survives the
+    cleaning. One row per (file, carrier position) with ``status``:
+
+    - ``kept`` — the scan is in the cleaned dataset;
+    - ``excluded`` — the exports have this scan but it was removed (``reason``: blank pot,
+      duplicate scan, or dropped by you);
+    - ``not in exports`` — no tabular row at all (nothing was decided about it).
+
+    A `.ply` matches a row on carrier + position + time (the file's UTC time + the offset already
+    in ``local``) within ``tol_minutes``."""
+    cols = ["path", "kind", "block", "position", "local", "status", "reason"]
+    if inventory is None or not len(inventory):
+        return pd.DataFrame(columns=cols)
+    tol = pd.Timedelta(minutes=tol_minutes)
+
+    def by_block(df):
+        if df is None or not len(df):
+            return {}
+        d = df[["block", "position", "timestamp", "is_blank"]].copy()
+        d["timestamp"] = pd.to_datetime(d["timestamp"])
+        return {b: g for b, g in d.groupby("block")}
+
+    K, C = by_block(kept), by_block(candidates)
+    recs = []
+    for _, r in inventory.iterrows():
+        b, t = int(r["block"]), pd.Timestamp(r["local"])
+        cand = C.get(b, pd.DataFrame(columns=["position", "timestamp", "is_blank"]))
+        cand = cand[(cand["timestamp"] - t).abs() <= tol]
+        keep = K.get(b, pd.DataFrame(columns=["position", "timestamp", "is_blank"]))
+        if r["kind"] == "unitfile":
+            positions = [int(r["unit_n"])]
+        else:
+            positions = sorted(cand["position"].unique().tolist()) or [1, 2, 3, 4]
+        for p in positions:
+            here = cand[cand["position"] == p]
+            k = keep[(keep["position"] == p) & ((keep["timestamp"] - t).abs() <= tol)]
+            if len(k):
+                status, reason = "kept", ""
+            elif not len(here):
+                status, reason = "not in exports", "no matching row in the tabular exports"
+            elif here["is_blank"].any():
+                status, reason = "excluded", "blank pot"
+            elif len(keep[(keep["position"] == p)
+                          & (keep["timestamp"].dt.normalize() == t.normalize())]):
+                status, reason = "excluded", "duplicate scan — another scan that day was kept"
+            else:
+                status, reason = "excluded", "dropped"
+            recs.append({"path": r["path"], "kind": r["kind"], "block": b, "position": int(p),
+                         "local": r["local"], "status": status, "reason": reason})
+    return pd.DataFrame(recs, columns=cols)
+
+
+def copy_kept_ply(status: pd.DataFrame, out_dir: str | Path, progress=None) -> pd.DataFrame:
+    """Copy the `.ply` files that hold at least one kept plant into ``out_dir`` (originals are
+    never touched) and write ``ply_file_list.csv`` there listing every file and why it was or wasn't
+    copied. A whole-carrier file is copied if any of its plants is kept; the list notes any excluded
+    plants it still contains. Returns the per-file list."""
+    import shutil
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    rows = []
+    files = list(status.groupby("path", sort=False))
+    for i, (path, g) in enumerate(files):
+        kept = g[g["status"] == "kept"]
+        other = g[g["status"] != "kept"]
+        if len(kept):
+            shutil.copy2(path, out / Path(path).name)
+            note = "; ".join(f"position {p}: {s}{' (' + w + ')' if w else ''}"
+                             for p, s, w in zip(other["position"], other["status"], other["reason"]))
+            rows.append({"file": Path(path).name, "copied": True,
+                         "kept plants": ", ".join(map(str, kept["position"])),
+                         "note": ("also contains — " + note) if note else ""})
+        else:
+            reasons = "; ".join(sorted(set(other["reason"])))
+            rows.append({"file": Path(path).name, "copied": False, "kept plants": "",
+                         "note": reasons})
+        if progress:
+            progress((i + 1) / max(len(files), 1))
+    lst = pd.DataFrame(rows)
+    lst.to_csv(out / "ply_file_list.csv", index=False)
+    return lst
 
 
 # ------------------------------------------------------------------------ ground truth
