@@ -41,9 +41,6 @@ __all__ = [
     "Instance", "discover_instances", "instance_summary",
     "detect_supersession", "union_instances", "overlapping_records",
     "scan_key", "carrier_rescans", "resolve_union", "discover_ply",
-    "REFLECTANCE_CHANNELS", "channel_values", "reflectance_distributions", "rasterise_rgb",
-    "point_normals", "estimate_pot_geometry", "classify_cloud", "clean_cloud", "filter_mesh",
-    "mesh_traits", "portal_trait_comparison", "clean_all_scans", "write_ply_bytes",
     "load_groundtruth", "join_groundtruth", "manual_measures",
 ]
 
@@ -161,480 +158,6 @@ def read_ply_lenient(path: str | Path):
     block = int(bm.group(1)) if bm else None
     utc = pd.to_datetime(tm.group(1), format="%Y%m%dT%H%M%S") if tm else None
     return verts, faces, block, utc
-
-
-# ---------------------------------------------------------------- point-cloud cleaning
-
-# The reflectance channels the viewer/distributions expose. 'greenness' = green - red, the
-# cleanest soil-vs-tissue separator found on the real data.
-REFLECTANCE_CHANNELS = ("ndvi", "greenness", "nir", "red", "green", "blue", "hue")
-
-
-def channel_values(pts: np.ndarray, ch: str) -> np.ndarray:
-    """Per-point values for a named reflectance channel (handles the derived 'greenness')."""
-    if ch == "greenness":
-        return pts["green"].astype(np.float64) - pts["red"].astype(np.float64)
-    return pts[ch].astype(np.float64)
-
-
-def _xyz(pts: np.ndarray) -> np.ndarray:
-    return np.column_stack([pts["x"], pts["y"], pts["z"]]).astype(np.float64)
-
-
-def point_normals(pts: np.ndarray, k: int = 20):
-    """Per-point surface normal + planarity via local PCA over k nearest neighbours (scipy
-    cKDTree, batched eigh). Soil-plane points get near-vertical normals (|nz|≈1); pot rim/wall
-    points get near-horizontal/radial normals; plant tissue gets varied normals."""
-    from scipy.spatial import cKDTree
-    xyz = _xyz(pts)
-    if len(xyz) < 4:
-        return np.tile([0, 0, 1.0], (len(xyz), 1)), np.zeros(len(xyz))
-    k = min(k, len(xyz))
-    _, idx = cKDTree(xyz).query(xyz, k=k)
-    nb = xyz[idx]                                   # (N, k, 3)
-    c = nb - nb.mean(axis=1, keepdims=True)
-    cov = np.einsum("nki,nkj->nij", c, c) / k       # (N, 3, 3)
-    w, v = np.linalg.eigh(cov)                       # ascending eigenvalues
-    normals = v[:, :, 0]                             # smallest-eigenvalue eigenvector
-    planarity = (w[:, 1] - w[:, 0]) / (w[:, 2] + 1e-9)
-    return normals, planarity
-
-
-def soil_plane_z(pts: np.ndarray) -> float:
-    """The soil-surface height as the **peak of the low-z distribution** over the whole cloud.
-    Pooling every pot's exposed soil into one histogram is robust to per-pot occlusion (a pot whose
-    soil is hidden by foliage would give a falsely-high local estimate). All pots sit on one level
-    bench, so this shared plane applies to each."""
-    z = pts["z"].astype(np.float64)
-    lo = z[z <= np.percentile(z, 40)]
-    if len(lo) < 10:
-        return float(np.percentile(z, 5))
-    hist, edges = np.histogram(lo, bins=40)
-    i = int(np.argmax(hist))
-    return float((edges[i] + edges[i + 1]) / 2.0)
-
-
-def estimate_pot_geometry(pts: np.ndarray, pot_radius: float | None = None,
-                          soil_z: float | None = None) -> dict:
-    """Pot geometry for a single pot's points: a **robust centre** (median x,y — stable even when
-    the plant occludes the soil), the soil-surface height, and a radius. ``soil_z`` should be the
-    carrier-wide :func:`soil_plane_z` (robust to occlusion); if None it falls back to this pot's low
-    percentile. ``pot_radius`` (recommended — pots are a fixed, known size) is used directly if
-    given, else auto-estimated from the point spread."""
-    xyz = _xyz(pts)
-    x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
-    cx, cy = float(np.median(x)), float(np.median(y))       # robust centre
-    zmin = float(np.percentile(z, 1))
-    sz = float(soil_z) if soil_z is not None else float(np.percentile(z, 5))
-    if pot_radius:
-        radius = float(pot_radius)
-    else:
-        r = np.hypot(x - cx, y - cy)
-        radius = float(np.percentile(r, 92))                # plant spreads ~ to the pot edge
-    return {"cx": cx, "cy": cy, "radius": radius, "soil_z": sz,
-            "zmin": zmin, "rim_z": zmin + 20.0}
-
-
-def classify_cloud(pts: np.ndarray, geom: dict | None = None, strictness: float = 1.0,
-                   normals=None, planarity=None, rim_margin: float = 15.0,
-                   soil_ceiling: float = 5.0, pot_radius: float | None = None,
-                   soil_z: float | None = None):
-    """Label every point **plant / soil / rim** by geometry. Returns (labels, geom).
-
-    **Soil = a negative cylinder** centred on the pot: everything within
-    ``radius − rim_margin`` of the pot centre and at or below ``soil surface + soil_ceiling`` mm.
-    This is **pure geometry — no greenness gate** — so **green moss/algae on the soil is removed**
-    too (a reflectance test cannot, because moss is green). The ``rim_margin`` keeps the cylinder
-    *inside* the pot rim, so plant parts overhanging the edge are never clipped; ``soil_ceiling``
-    (a few mm) sets how far above the soil surface to cut, so the canopy is kept.
-
-    **Rim** = the pot's rim ring — near the pot radius, low, with a radial (non-vertical) normal.
-    """
-    if geom is None:
-        geom = estimate_pot_geometry(pts, pot_radius=pot_radius, soil_z=soil_z)
-    xyz = _xyz(pts)
-    z = xyz[:, 2]
-    r = np.hypot(xyz[:, 0] - geom["cx"], xyz[:, 1] - geom["cy"])
-    labels = np.full(len(pts), "plant", dtype=object)
-
-    cyl_r = max(geom["radius"] - rim_margin, 1.0)
-    ceiling = geom["soil_z"] + soil_ceiling
-    soil = (r <= cyl_r) & (z <= ceiling)             # the negative cylinder (moss-proof)
-    labels[soil] = "soil"
-
-    if normals is None:
-        normals, planarity = point_normals(pts)
-    nz = np.abs(normals[:, 2])
-    rim_band = (0.05 + 0.05 * strictness) * max(geom["radius"], 1.0)
-    rim = ((np.abs(r - geom["radius"]) <= rim_band) & (nz < 0.55)
-           & (z <= geom["soil_z"] + 40.0) & (labels == "plant"))
-    labels[rim] = "rim"
-    return labels, geom
-
-
-def _drop_tiny_components(pts: np.ndarray, keep: np.ndarray, res_mm: float = 4.0,
-                          min_voxels: int = 4) -> np.ndarray:
-    """Sweep only *tiny* isolated blobs of kept points (stray granules) via voxel connected
-    components, per unit_id. Deliberately small threshold so leaf tips survive."""
-    from scipy import ndimage
-    out = keep.copy()
-    xyz = _xyz(pts)
-    for u in np.unique(pts["unit_id"]):
-        m = (pts["unit_id"] == u) & keep
-        if m.sum() < min_voxels:
-            continue
-        p = xyz[m]
-        gi = np.floor((p - p.min(0)) / res_mm).astype(int)
-        dims = gi.max(0) + 1
-        grid = np.zeros(dims, dtype=bool)
-        grid[gi[:, 0], gi[:, 1], gi[:, 2]] = True
-        lab, n = ndimage.label(grid, structure=np.ones((3, 3, 3)))
-        sizes = np.bincount(lab.ravel())
-        small = {c for c in range(1, n + 1) if sizes[c] < min_voxels}
-        if small:
-            bad = np.array([lab[tuple(g)] in small for g in gi])
-            out[np.where(m)[0][bad]] = False
-    return out
-
-
-def clean_cloud(pts: np.ndarray, strictness: float = 1.0, geom: dict | None = None,
-                use_geometry: bool = True, small_components: bool = True,
-                ndvi_min: float = 0.4, gr_min: float = 8.0,
-                rim_margin: float = 15.0, soil_ceiling: float = 5.0,
-                pot_radius: float | None = None):
-    """Classify soil/pot vs plant and return ``(plant_mask, labels, geoms)`` — geometry, computed
-    **per pot** (``unit_id``) so each pot's centre/radius/rim is its own. Soil is a **negative
-    cylinder** (moss-proof, no greenness — see :func:`classify_cloud`): ``rim_margin`` keeps it
-    inside the rim (no plant loss at the edge), ``soil_ceiling`` sets how far above the surface to
-    cut. ``plant_mask`` is a boolean over the input order (so faces filter with it). ``geoms`` maps
-    unit_id → geometry dict. Falls back to the colour gate when ``use_geometry`` is False."""
-    if use_geometry and len(pts) >= 4:
-        normals, planarity = point_normals(pts)
-        gsoil = soil_plane_z(pts)                    # one robust soil plane for the whole carrier
-        labels = np.full(len(pts), "plant", dtype=object)
-        geoms = {}
-        for u in np.unique(pts["unit_id"]):
-            m = np.where(pts["unit_id"] == u)[0]
-            g = None if geom is None else geom.get(int(u)) if isinstance(geom, dict) else geom
-            lab, g = classify_cloud(pts[m], g, strictness, normals[m], planarity[m],
-                                    rim_margin=rim_margin, soil_ceiling=soil_ceiling,
-                                    pot_radius=pot_radius, soil_z=gsoil)
-            labels[m] = lab
-            geoms[int(u)] = g
-        geom = geoms
-    else:
-        ndvi = pts["ndvi"].astype(np.float64)
-        gr = pts["green"].astype(np.float64) - pts["red"].astype(np.float64)
-        labels = np.where((ndvi > ndvi_min) & (gr > gr_min), "plant", "soil").astype(object)
-        geom = geom if isinstance(geom, dict) else {}
-    plant_mask = labels == "plant"
-    if small_components and plant_mask.any():
-        plant_mask = _drop_tiny_components(pts, plant_mask)
-        labels = np.where(plant_mask, labels, np.where(labels == "plant", "soil", labels))
-    return plant_mask, labels, geom
-
-
-def filter_mesh(verts: np.ndarray, faces, plant_mask: np.ndarray):
-    """Keep only triangles whose 3 vertices are all plant, and reindex to the kept vertices.
-    Returns (kept_verts, kept_faces|None)."""
-    kept_verts = verts[plant_mask]
-    if faces is None:
-        return kept_verts, None
-    remap = -np.ones(len(verts), dtype=np.int64)
-    remap[np.where(plant_mask)[0]] = np.arange(int(plant_mask.sum()))
-    keep_face = plant_mask[faces].all(axis=1)
-    new_faces = remap[faces[keep_face]]
-    return kept_verts, new_faces
-
-
-def mesh_traits(verts: np.ndarray, faces, plant_mask: np.ndarray | None = None) -> pd.DataFrame:
-    """Per-plant (``unit_id``) traits from the **triangulated mesh**: surface/projected leaf area
-    (Σ triangle areas), convex-hull volume & area (scipy), and height. Optionally restricted to
-    plant triangles via ``plant_mask``. Clearly app-derived; never overwrites portal values."""
-    if faces is None or len(faces) == 0:
-        return pd.DataFrame()
-    xyz = _xyz(verts)
-    uid = verts["unit_id"]
-    f = faces
-    if plant_mask is not None:
-        f = faces[plant_mask[faces].all(axis=1)]
-    rows = []
-    for u in np.unique(uid):
-        fu = f[(uid[f] == u).all(axis=1)]
-        if len(fu) == 0:
-            continue
-        v0, v1, v2 = xyz[fu[:, 0]], xyz[fu[:, 1]], xyz[fu[:, 2]]
-        area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1).sum()
-        pu = xyz[np.unique(fu)]
-        hv = ha = np.nan
-        if len(pu) >= 4:
-            try:
-                from scipy.spatial import ConvexHull
-                h = ConvexHull(pu)
-                hv, ha = h.volume, h.area
-            except Exception:
-                pass
-        z = pu[:, 2]
-        rows.append({
-            "unit_id": int(u), "n_triangles": int(len(fu)),
-            "mesh_surface_area_mm2": round(float(area), 1),
-            "convex_hull_volume_mm3": round(float(hv), 1),
-            "convex_hull_area_mm2": round(float(ha), 1),
-            "mesh_height_mm": round(float(np.percentile(z, 99) - np.percentile(z, 1)), 1),
-        })
-    return pd.DataFrame(rows)
-
-
-def _find_col(df, *keys):
-    for c in df.columns:
-        cl = c.lower()
-        if all(k in cl for k in keys):
-            return c
-    return None
-
-
-def portal_trait_comparison(mtraits: pd.DataFrame, verts: np.ndarray,
-                            tabular: pd.DataFrame, block: int, local_dt) -> pd.DataFrame:
-    """Join the mesh traits to PlantEye's portal traits for the same plant so the user can
-    compare and decide. Maps ``unit_id`` → carrier position by y-centroid order, then to the
-    tabular row (block:position on the matching date)."""
-    if mtraits.empty:
-        return pd.DataFrame()
-    uid = verts["unit_id"]
-    y = verts["y"].astype(np.float64)
-    order = sorted(np.unique(uid), key=lambda u: y[uid == u].mean())
-    uid2pos = {int(u): i + 1 for i, u in enumerate(order)}
-
-    tb = tabular[tabular["block"] == block] if "block" in tabular else tabular.iloc[0:0]
-    if local_dt is not None and "date" in tb:
-        d = pd.Timestamp(local_dt).normalize()
-        same = tb[tb["date"] == d]
-        if len(same):
-            tb = same
-    c_proj = _find_col(tb, "projected", "leaf", "area")
-    c_3d = _find_col(tb, "3d", "leaf", "area")
-    c_hull = _find_col(tb, "convex", "hull", "area")
-    c_h = _find_col(tb, "plant", "height", "max") or _find_col(tb, "plant", "height")
-
-    def portal(pos, col):
-        if not col:
-            return np.nan
-        row = tb[tb["position"] == pos]
-        return float(row[col].iloc[0]) if len(row) else np.nan
-
-    rows = []
-    for _, mt in mtraits.iterrows():
-        pos = uid2pos.get(int(mt["unit_id"]))
-        rows.append({
-            "unit_id": mt["unit_id"], "position": pos,
-            "mesh_surface_area": mt["mesh_surface_area_mm2"],
-            "portal_projected_leaf_area": portal(pos, c_proj),
-            "portal_3d_leaf_area": portal(pos, c_3d),
-            "mesh_hull_volume": mt["convex_hull_volume_mm3"],
-            "portal_hull_area": portal(pos, c_hull),
-            "mesh_height": mt["mesh_height_mm"],
-            "portal_height": portal(pos, c_h),
-        })
-    return pd.DataFrame(rows)
-
-
-def clean_all_scans(inventory: pd.DataFrame, strictness: float = 1.0,
-                    out_dir: str | Path | None = None, progress=None,
-                    rim_margin: float = 15.0, soil_ceiling: float = 5.0,
-                    pot_radius: float | None = None) -> pd.DataFrame:
-    """Batch: run the geometry cleaner over a whole-experiment PLY inventory (from
-    :func:`discover_ply`), optionally writing a cleaned **mesh** `.ply` per scan to ``out_dir``
-    (non-destructive). Returns a per-scan log of points/faces removed."""
-    logs = []
-    n = len(inventory)
-    for i, (_, row) in enumerate(inventory.iterrows()):
-        try:
-            verts, faces, blk, utc = read_ply_lenient(row["path"])
-            plant_mask, labels, geom = clean_cloud(verts, strictness=strictness,
-                                                   rim_margin=rim_margin, soil_ceiling=soil_ceiling,
-                                                   pot_radius=pot_radius)
-            kv, kf = filter_mesh(verts, faces, plant_mask)
-            if out_dir:
-                Path(out_dir).mkdir(parents=True, exist_ok=True)
-                (Path(out_dir) / f"{Path(row['path']).stem}_cleaned.ply").write_bytes(
-                    write_ply_bytes(kv, kf))
-            logs.append({"scan": Path(row["path"]).name, "block": blk,
-                         "points_in": len(verts), "points_kept": int(plant_mask.sum()),
-                         "removed": int((~plant_mask).sum())})
-        except Exception as e:
-            logs.append({"scan": Path(row["path"]).name, "block": row.get("block"),
-                         "points_in": np.nan, "points_kept": np.nan, "removed": f"ERROR: {e}"})
-        if progress:
-            progress((i + 1) / max(n, 1))
-    return pd.DataFrame(logs)
-
-
-def reflectance_distributions(raw_pts: np.ndarray, clean_pts: np.ndarray,
-                              channels=REFLECTANCE_CHANNELS):
-    """Summarise how cleaning shifts each reflectance trait's density: raw vs clean median and
-    the shift, plus the % of points removed. The UI plots the full histograms from
-    :func:`channel_values`; this returns the summary table."""
-    rows = []
-    for ch in channels:
-        r = channel_values(raw_pts, ch)
-        c = channel_values(clean_pts, ch) if len(clean_pts) else np.array([np.nan])
-        rows.append({
-            "channel": ch,
-            "raw_median": round(float(np.median(r)), 3),
-            "clean_median": round(float(np.nanmedian(c)), 3),
-            "shift": round(float(np.nanmedian(c) - np.median(r)), 3),
-        })
-    pct_removed = round(100 * (1 - len(clean_pts) / len(raw_pts)), 1) if len(raw_pts) else 0.0
-    return pd.DataFrame(rows), pct_removed
-
-
-def rasterise_rgb(pts: np.ndarray, axes=("x", "y"), res_mm: float = 2.0,
-                  brighten: float = 1.0, gamma: float = 1.0):
-    """Rasterise the red/green/blue channels into one true-colour image (H×W×3 in [0,1]).
-    ``brighten`` (>1) and ``gamma`` (>1) lighten it for the 'Enhanced RGB' panel. Empty cells
-    are black. Returns (image, extent) with the cloud's true extent (pad at plot time)."""
-    gr, ext = rasterise(pts, "red", axes, res_mm)
-    gg, _ = rasterise(pts, "green", axes, res_mm)
-    gb, _ = rasterise(pts, "blue", axes, res_mm)
-    img = np.zeros((*gr.shape, 3), dtype=np.float64)
-    for k, g in enumerate((gr, gg, gb)):
-        img[:, :, k] = np.nan_to_num(g, nan=0.0)
-    img = np.clip(img / 255.0, 0, 1)
-    if brighten != 1.0:
-        img = np.clip(img * brighten, 0, 1)
-    if gamma and gamma != 1.0:
-        img = np.clip(img, 0, 1) ** (1.0 / gamma)
-    return img, ext
-
-
-def turntable_gif(pts: np.ndarray, faces=None, *, color_by="rgb", up_axis="z",
-                  turns: int = 1, n_frames: int = 60, fps: int = 20, size: int = 480,
-                  elev: float = 18.0, margin: float = 1.15, bg: str = "white",
-                  point_size: float = 2.0, brighten: float = 1.6,
-                  max_points: int = 60000, progress=None) -> bytes:
-    """Render a looping **turntable animation** of a point cloud (or mesh) → animated-GIF bytes.
-
-    A companion to the standalone *3d-turntable-animator* (github.com/agyeyapratap-sketch/
-    3d-turntable-animator): the framing follows its reference ``render_turntable.py`` — centre
-    the geometry, fit the camera from the bounding sphere and a margin, and orbit about the
-    chosen up-axis — but rendering here uses **matplotlib (Agg) + Pillow** instead of
-    Open3D/ffmpeg, so it runs headless, needs no extra dependency, and reuses the app's
-    existing 3D machinery. The camera (not the data) orbits: elevation is held and azimuth
-    sweeps ``360×turns`` degrees, so the loop is seamless.
-
-    ``color_by`` — ``'rgb'`` (true colour, brightened) or any spectral channel the app
-    already renders: ``'ndvi'``, ``'greenness'``, ``'nir'``, ``'nir940'``, ``'hue'``,
-    ``'intensity'``, plus ``'height'``.
-    ``up_axis`` — which data axis stands up / is spun about (``'z'`` for an upright plant).
-    ``faces`` — if an (M,3) index array is given, the triangulated surface is spun instead of
-    points. Returns GIF bytes for ``st.image`` and a download button.
-    """
-    import io
-    import mpl_toolkits.mplot3d  # noqa: F401  (registers the '3d' projection)
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib import colormaps, colors as mcolors
-    from PIL import Image
-
-    is_mesh = faces is not None and len(faces) > 0
-    xyz = _xyz(pts)
-    if len(xyz) == 0:
-        raise ValueError("no points to animate")
-
-    # decimate a dense *point* cloud for responsiveness (the reference defers this too);
-    # a mesh keeps every vertex so its face indices stay valid.
-    src = pts
-    if not is_mesh and max_points and len(xyz) > max_points:
-        sel = np.random.default_rng(0).choice(len(xyz), int(max_points), replace=False)
-        xyz, src = xyz[sel], pts[sel]
-
-    # stand the requested axis up (matplotlib's vertical is z), then centre on the bounding box
-    order = {"x": (1, 2, 0), "y": (2, 0, 1), "z": (0, 1, 2)}[up_axis]
-    xyz = xyz[:, order]
-    xyz = xyz - (xyz.min(axis=0) + xyz.max(axis=0)) / 2.0
-    # Frame so the plant fills the frame vertically without ever clipping as it spins: the
-    # horizontal half-extent is the in-plane radius (the widest the silhouette gets at any
-    # azimuth), the vertical half-extent is the height. A matching box_aspect keeps it true-scale.
-    rh = (float(np.hypot(xyz[:, 0], xyz[:, 1]).max()) or 1.0) * float(margin)
-    rz = (float(np.abs(xyz[:, 2]).max()) or 1.0) * float(margin)
-
-    # colours, matched to the rest of the app — true colour or any spectral channel
-    _CH_CMAP = {"ndvi": "RdYlGn", "greenness": "RdYlGn", "nir": "inferno",
-                "nir940": "inferno", "hue": "hsv", "intensity": "gray",
-                "height": "YlGn"}
-    facecolors = None
-    if color_by == "rgb" and all(c in src.dtype.names for c in ("red", "green", "blue")):
-        rgb = np.column_stack([src["red"], src["green"], src["blue"]]).astype(float) / 255.0
-        col = np.clip(rgb * float(brighten), 0, 1)
-    else:
-        vals = xyz[:, 2] if color_by == "height" else channel_values(src, color_by)
-        vlo, vhi = np.percentile(vals, [2, 98]) if len(vals) > 1 else (0.0, 1.0)
-        norm = mcolors.Normalize(vlo, vhi if vhi > vlo else vlo + 1)
-        col = colormaps[_CH_CMAP.get(color_by, "viridis")](norm(vals))
-    if is_mesh:
-        facecolors = col  # per-vertex; trisurf averages to faces
-
-    dark = bg == "black"
-    fig = Figure(figsize=(size / 100.0, size / 100.0), dpi=100,
-                 facecolor="black" if dark else "white")
-    FigureCanvasAgg(fig)
-    ax = fig.add_subplot(111, projection="3d")
-    ax.set_facecolor("black" if dark else "white")
-
-    if is_mesh:
-        ax.plot_trisurf(xyz[:, 0], xyz[:, 1], xyz[:, 2], triangles=np.asarray(faces),
-                        color="#7cbf6b" if facecolors is None else None,
-                        linewidth=0, antialiased=False, shade=facecolors is None)
-        # per-vertex colour → average onto triangles (plot_trisurf can't take vertex colours)
-        if facecolors is not None:
-            tri = ax.collections[-1]
-            tri.set_fc(facecolors[np.asarray(faces)].mean(axis=1))
-    else:
-        ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=col, s=float(point_size),
-                   linewidths=0, depthshade=False)
-
-    ax.set_box_aspect((rh, rh, rz))
-    ax.set_xlim(-rh, rh); ax.set_ylim(-rh, rh); ax.set_zlim(-rz, rz)
-    ax.set_axis_off()
-
-    frames = []
-    n_frames = max(2, int(n_frames))
-    for i in range(n_frames):
-        ax.view_init(elev=float(elev), azim=-60.0 + 360.0 * int(turns) * i / n_frames)
-        fig.canvas.draw()
-        frames.append(Image.frombytes(
-            "RGBA", fig.canvas.get_width_height(),
-            bytes(fig.canvas.buffer_rgba())).convert("RGB"))
-        if progress:
-            progress((i + 1) / n_frames)
-
-    buf = io.BytesIO()
-    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
-                   loop=0, duration=int(round(1000.0 / max(1, int(fps)))),
-                   disposal=2, optimize=True)
-    return buf.getvalue()
-
-
-_PLY_HDR_TYPE = {"float32": "float", "uint8": "uchar", "uint16": "ushort", "int32": "int"}
-
-
-def write_ply_bytes(verts: np.ndarray, faces=None) -> bytes:
-    """Serialise a (cleaned) vertex array back to a binary_little_endian PLY. If ``faces`` (an
-    (M,3) index array, already reindexed to ``verts``) is given, the triangulated **mesh** is
-    preserved so the cleaned cloud is re-processable. Non-destructive to the original."""
-    props = [f"property {_PLY_HDR_TYPE[str(verts.dtype[n])]} {n}" for n in verts.dtype.names]
-    header = "ply\nformat binary_little_endian 1.0\n" + f"element vertex {len(verts)}\n" + \
-             "\n".join(props) + "\n"
-    if faces is not None and len(faces):
-        header += f"element face {len(faces)}\nproperty list uchar int vertex_index\n"
-    header += "end_header\n"
-    out = header.encode("ascii") + np.ascontiguousarray(verts).tobytes()
-    if faces is not None and len(faces):
-        frec = np.empty(len(faces), dtype=_PLY_FACE_DTYPE)
-        frec["n"] = 3
-        frec["i"] = np.asarray(faces, dtype=np.int32)
-        out += frec.tobytes()
-    return out
 
 
 # --------------------------------------------------------------------------- instances
@@ -925,19 +448,22 @@ _PLY_UNIT = re.compile(r"^(\d+)_(\d{8}T\d{6})_unitfile_(\d+)_(\d+)\.ply$", re.I)
 
 
 def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
-    """Recursively find every `.ply` for an experiment (spread across download folders like the
-    tabular exports) and dedup to one record per scan. Handles both `<block>_<UTC>_full.ply`
-    (whole carrier, richer) and `<block>_<UTC>_unitfile_N_M.ply` (per-plant split); on the same
-    `(block, UTC)` the `_full` file wins (the split is redundant). Genuine retakes (same block,
-    different UTC) are kept. Returns path, block, utc, local time, kind, size."""
+    """Recursively find every `.ply` for an experiment and dedup to one record per scan. Handles
+    `<block>_<UTC>_full.ply` (whole carrier) and `<block>_<UTC>_unitfile_N_M.ply` (one plant, N =
+    carrier position). Where a `_full` file exists for a (block, UTC) its per-plant files are
+    redundant; otherwise every plant's unitfile is kept. Genuine retakes (same block, different
+    UTC) are kept. Returns path, block, utc, local time, kind, unit_n (position, unitfiles only),
+    size."""
     folder = Path(folder)
     recs = []
     for p in folder.rglob("*.ply"):
         m = _PLY_FULL.match(p.name)
-        kind = "full"
+        kind, unit_n = "full", None
         if not m:
             m = _PLY_UNIT.match(p.name)
             kind = "unitfile"
+            if m:
+                unit_n = int(m.group(3))
         if not m:
             continue
         utc = pd.to_datetime(m.group(2), format="%Y%m%dT%H%M%S")
@@ -945,18 +471,19 @@ def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
             mb = round(p.stat().st_size / 1024**2, 2)
         except OSError:
             mb = float("nan")
-        recs.append({"path": p, "block": int(m.group(1)), "utc": utc, "kind": kind,
+        recs.append({"path": p, "block": int(m.group(1)), "utc": utc, "kind": kind, "unit_n": unit_n,
                      "local": utc + pd.Timedelta(hours=offset_hours), "mb": mb})
-    cols = ["path", "block", "utc", "kind", "local", "mb"]
+    cols = ["path", "block", "utc", "kind", "unit_n", "local", "mb"]
     if not recs:
         return pd.DataFrame(columns=cols)
     inv = pd.DataFrame(recs)
-    inv["_rank"] = (inv["kind"] == "full").astype(int)  # prefer full
-    inv = (inv.sort_values(["block", "utc", "_rank"], ascending=[True, True, False])
-              .drop_duplicates(["block", "utc"], keep="first")
-              .drop(columns="_rank")
-              .sort_values(["local", "block"])
-              .reset_index(drop=True))
+    full_keys = set(zip(inv.loc[inv["kind"] == "full", "block"], inv.loc[inv["kind"] == "full", "utc"]))
+    redundant = (inv["kind"] == "unitfile") & np.array(
+        [k in full_keys for k in zip(inv["block"], inv["utc"])], dtype=bool)
+    inv = (inv[~redundant]
+           .drop_duplicates(["block", "utc", "kind", "unit_n"])
+           .sort_values(["local", "block", "unit_n"], na_position="first")
+           .reset_index(drop=True))
     return inv[cols]
 
 

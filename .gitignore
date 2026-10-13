@@ -25,6 +25,7 @@ packaging/Output/
 # ── Unpublished research material & dev-only scripts (NOT part of the public tool) ──
 docs/
 tools/build_design_pdf.py
+tools/build_validation_report.py
 tools/verify_reader.py
 
 # ── Data — NEVER commit experiment data ──────────────────────────────────────

@@ -25,7 +25,7 @@ for meta in ("streamlit", "numpy", "pandas", "altair", "pyarrow", "packaging"):
         pass
 
 # The app's own source, bundled as data so Streamlit can run it (mirrors the source layout).
-for f in ("pe_app.py", "pe_data.py", "pe_qc.py", "pe_design.py"):
+for f in ("pe_app.py", "pe_data.py", "pe_qc.py", "pe_design.py", "pe_viz.py"):
     datas.append((os.path.join(ROOT, "app", f), "app"))
 datas.append((os.path.join(ROOT, "tools", "planteye_io.py"), "tools"))
 

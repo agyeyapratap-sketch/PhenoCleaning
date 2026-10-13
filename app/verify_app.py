@@ -125,29 +125,21 @@ if len(cand):
     dropped = pe_data.resolve_union(insts, {k: {"action": "drop"}})
     print(f"resolve_union with 1 drop: {base_n} -> {len(dropped)} rows")
 
-rule("10. v3.1 — PLY MERGE + GEOMETRY CLEANING + MESH TRAITS")
-inv = pe_data.discover_ply(ROOT)
-print(f"discover_ply under experiment folder: {len(inv)} unique scans")
-_ply_dir = os.environ.get("PLANTEYE_TEST_PLY")
-plys = list(Path(_ply_dir).rglob('*_full.ply'))[:1] if (_ply_dir and Path(_ply_dir).exists()) else []
-if plys:
-    v, faces, b, u = pe_data.read_ply_lenient(plys[0])
-    print(f"read_ply_lenient: {len(v)} verts, {0 if faces is None else len(faces)} faces")
-    mask, labels, geoms = pe_data.clean_cloud(v)  # geometry-first
-    ul, cl = np.unique(labels, return_counts=True)
-    print(f"clean_cloud labels: {dict(zip(ul, cl.tolist()))}  plant kept {100*mask.mean():.0f}%")
-    dist, pct = pe_data.reflectance_distributions(v, v[mask])
-    print(f"NDVI median shift: {dist.loc[dist.channel=='ndvi','shift'].iloc[0]:+.3f}  "
-          f"greenness shift: {dist.loc[dist.channel=='greenness','shift'].iloc[0]:+.1f}  ({pct}% removed)")
-    mt = pe_data.mesh_traits(v, faces, plant_mask=mask)
-    print(f"mesh_traits: {len(mt)} units, total plant mesh area "
-          f"{mt['mesh_surface_area_mm2'].sum():.0f} mm² (portal Projected ~7624)")
-    kv, kf = pe_data.filter_mesh(v, faces, mask)
-    tmp = Path(tempfile.gettempdir()) / "_verify_cleaned.ply"
-    tmp.write_bytes(pe_data.write_ply_bytes(kv, kf))
-    v2, f2, _, _ = pe_data.read_ply_lenient(tmp)
-    print(f"cleaned mesh .ply round-trip: {len(v2)} verts, {0 if f2 is None else len(f2)} faces "
-          f"({'OK' if len(v2)==len(kv) and f2 is not None and len(f2)==len(kf) else 'MISMATCH'})")
-    tmp.unlink(missing_ok=True)
+rule("10. 3D FILES + VISUALISATION")
+import pe_viz  # noqa: E402
+_ply_dir = os.environ.get("PLANTEYE_TEST_PLY") or str(ROOT)
+inv = pe_data.discover_ply(_ply_dir)
+print(f"discover_ply: {len(inv)} scan file(s) ({inv['kind'].value_counts().to_dict() if len(inv) else {}})")
+if len(inv):
+    opts = pe_viz.plant_options(inv, uni)
+    r0 = opts.sort_values("dates").iloc[-1]
+    series = pe_viz.plant_series(inv, int(r0["block"]), int(r0["position"]))
+    print(f"plant {r0['label']}: {len(series)} date(s)")
+    pts = series[-1][1]
+    bad = [k for k in pe_viz.INDICES if k != "rgb" and not np.isfinite(pe_viz.index_values(pts, k)).any()]
+    print(f"{len(pe_viz.INDICES)} colour indices; all finite: {'yes' if not bad else bad}")
+    png = pe_viz.still_views(pts, "ndvi")
+    gif = pe_viz.growth_gif(series, key="gli", view="top") if len(series) > 1 else b""
+    print(f"still view {len(png)//1024} KB · growth animation {len(gif)//1024} KB")
 
 rule("DONE — engine ran end to end")

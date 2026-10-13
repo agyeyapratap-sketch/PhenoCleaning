@@ -15,17 +15,19 @@ regular, pseudoreplication) quietly inflate confidence. This pipeline makes that
 imputes or silently merges.
 
 ## What it does
-- **Ingest & reconcile** several TraitFinder exports (`.csv`/`.zip`) as one experiment.
-- **Curate** — you decide which scans to keep / drop / relabel; nothing is auto-removed.
-- **Quality & missing-data checks** — the audit, encoded (uneven intervals, blanks-with-signal,
-  duplicate vs repeat scans, carrier rescans, …).
-- **Irregular-timing time-series** on a true elapsed-days axis (no imputation).
-- **3D viewer** — per-plant RGB / NIR / NDVI panels, geometry-based **soil/pot-rim removal**
-  (moss-proof), mesh reconstruction, and mesh-vs-portal trait comparison.
-- **Turntable animation** — spin any plant (point cloud or reconstructed mesh) into a looping
-  GIF for talks, figures, or the supplement — coloured by true RGB or any spectral channel
-  (NDVI, greenness, NIR, hue…). Self-contained: no ffmpeg or extra software needed.
-- **Export** — tidy CSVs, cleaned mesh `.ply`, and a full audit log.
+Five tabs, kept deliberately simple:
+- **Data** — combine several TraitFinder exports (`.csv`/`.zip`) into one experiment, resolve
+  **duplicate scans** (you pick the keeper; nothing is auto-removed) and **remove blank pots**.
+- **Time-series** — trait trajectories on a true elapsed-days axis (no imputation), grouped by any
+  label, with a one-click **animated chart**.
+- **3D viewer** — view any PlantEye `.ply` scan from above and the side in **true colour or 20
+  colour indices** (NDVI, NDVI-940, NIR, PSRI, NPCI, GLI, ExG, ExR, ExG−ExR, NGRDI, VARI, MGRVI,
+  RGBVI, TGI, CIVE, hue, lightness, saturation, height). Animate it:
+  a **turntable**, a plant **growing over time** (top, side or 3D), **spinning through time**, or
+  **several plants side by side** in sync. One colour scale per animation; GIFs need no extra software.
+- **Export** — the cleaned dataset, every animation, and a log of every decision.
+- **Advanced** — optional factors, quality and missing-data checks, outlier curation, design
+  workbook and manual-measurement validation.
 
 ## Install (no coding required)
 Download the latest build for your OS from the **[Releases](../../releases)** page:
