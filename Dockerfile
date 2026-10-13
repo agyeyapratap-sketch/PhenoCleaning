@@ -6,7 +6,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Pinned Python deps (numpy/pandas/scipy/matplotlib ship manylinux wheels — no compiler needed)
+# Pinned Python deps (numpy/pandas/matplotlib/pillow ship manylinux wheels — no compiler needed)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY tools/ ./tools/
 
-# Writable output dir for cleaned .ply / exports
+# Writable output dir for exports
 RUN mkdir -p /app/out
 
 EXPOSE 8501

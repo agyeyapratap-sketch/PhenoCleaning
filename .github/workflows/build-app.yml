@@ -54,7 +54,7 @@ jobs:
           lipo -archs "$(python -c 'import sys; print(sys.executable)')" \
             || echo "  (arch introspection failed; continuing)"
           rm -rf w_arm w_x86 w_uni; mkdir -p w_arm w_x86 w_uni
-          # macOS 12.0 is the floor across the compiled deps (pyarrow 12.0, scipy-arm64 12.0);
+          # macOS 12.0 is the floor across the compiled deps (pyarrow 12.0);
           # a lower --platform value matches no wheel for those and pip reports "from versions: none".
           pip download -r requirements.txt --only-binary=:all: --python-version 3.12 \
             --platform macosx_12_0_arm64  -d w_arm

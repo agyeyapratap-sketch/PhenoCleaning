@@ -1,10 +1,12 @@
 # Launching the PhenoCleaning app
 
-Two ways to run it as a **relaunchable** app. Both keep it running until *you* stop it.
+Most people should simply install the app from the GitHub **Releases** page (see `README.md`) —
+no Python needed. The options below are for running it **from source**. Both keep it running
+until *you* stop it.
 
 ---
 
-## Option A — One-click launcher (recommended for now)
+## Option A — One-click launcher (Windows, from source)
 
 No Docker needed, and it has **full access to your data** (including mapped network drives).
 
@@ -14,18 +16,14 @@ No Docker needed, and it has **full access to your data** (including mapped netw
 3. **Leave the console window open** while you work. To stop the app, close that window
    or press **Ctrl+C** in it. To relaunch, just double-click `run_app.bat` again.
 
-That's it — because *you* launched it, it stays up (unlike a server launched by an assistant,
-which the environment can terminate).
-
 > Tip: right-click `run_app.bat` → *Send to* → *Desktop (create shortcut)* for a one-click icon.
 
 ---
 
-## Option B — Docker (portable / shareable, for later)
+## Option B — Docker (optional, for a shared server)
 
-Docker gives a reproducible, auto-restarting container — ideal for sharing the tool or for a
-GitHub release. **Docker Desktop must be installed first** (it is not on this machine yet:
-https://www.docker.com/products/docker-desktop/).
+Docker gives a reproducible, auto-restarting container — useful for hosting the tool on a shared
+machine. **Docker Desktop must be installed first** (https://www.docker.com/products/docker-desktop/).
 
 ```powershell
 # from this folder
@@ -54,9 +52,10 @@ reads mapped drives directly. Docker shines for the *shareable* version where us
 ---
 
 ## Requirements
-- **Option A:** Python 3.12+ on PATH with the packages in `requirements.txt`
-  (`pip install -r requirements.txt` if you ever move to a fresh machine/venv).
+- **Option A:** Python 3.12 on PATH with the pinned packages: `pip install -r requirements.txt`
+  (streamlit, numpy, pandas, matplotlib, pillow, openpyxl — no compiler or GPU needed).
 - **Option B:** Docker Desktop; everything else is built into the image from `requirements.txt`.
+- Hardware: as for the installed app — 4 GB RAM minimum, 8 GB recommended (see `README.md`).
 
 ## Stopping a stray server
 If a port-in-use error appears, another instance is running. Native: close its console window.

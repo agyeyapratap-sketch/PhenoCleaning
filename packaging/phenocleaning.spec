@@ -30,8 +30,6 @@ for f in ("pe_app.py", "pe_data.py", "pe_qc.py", "pe_design.py", "pe_viz.py"):
 datas.append((os.path.join(ROOT, "tools", "planteye_io.py"), "tools"))
 
 hiddenimports += [
-    "scipy", "scipy.spatial", "scipy.spatial.ckdtree", "scipy.ndimage",
-    "scipy.spatial._ckdtree", "scipy.spatial.transform",
     "matplotlib", "matplotlib.backends.backend_agg", "mpl_toolkits.mplot3d",
     "openpyxl", "pandas", "numpy", "pyarrow",
 ]
@@ -48,7 +46,7 @@ a = Analysis(
     excludes=[
         # heavy ML/data libs present on this machine but unused by the app
         "torch", "torchvision", "torchaudio", "tensorflow", "tensorboard",
-        "keras", "jax", "jaxlib", "sympy", "numba", "llvmlite",
+        "keras", "jax", "jaxlib", "sympy", "numba", "llvmlite", "scipy",
         # notebook / GUI stacks not needed for a headless Streamlit build
         "IPython", "ipykernel", "notebook", "nbconvert", "nbformat", "jupyter",
         "tkinter", "PyQt5", "PySide2", "PySide6", "PyQt6",

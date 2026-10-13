@@ -22,11 +22,15 @@ pyinstaller packaging\phenocleaning.spec --noconfirm
 > `pyinstaller packaging\phenocleaning.spec --noconfirm --distpath C:\Users\<you>\pe_dist --workpath C:\Users\<you>\pe_build`
 > (Windows' 260-char path limit + a long project path is the cause. Keep the output near the drive root.)
 
-**Output:** `dist\PhenoCleaning\` — a ~300 MB folder. Users run **`PhenoCleaning.exe`** inside it.
-To distribute: zip the whole `PhenoCleaning` folder and send it (they unzip and double-click the exe).
+**Output:** `dist\PhenoCleaning\` — a folder of roughly 300 MB. Users run **`PhenoCleaning.exe`**
+inside it. To distribute: zip the whole `PhenoCleaning` folder (they unzip and double-click the exe),
+or wrap it in the Windows installer:
 
-Keep the built folder **outside OneDrive** (don't let 300 MB sync). A great next step for a polished
-installer with a Start-menu shortcut is **Inno Setup** wrapping this folder — ask and I'll add it.
+```powershell
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss   # -> packaging\Output\PhenoCleaning-Setup.exe
+```
+
+Keep the built folder **outside OneDrive** so it doesn't sync.
 
 ---
 
@@ -35,13 +39,14 @@ installer with a Start-menu shortcut is **Inno Setup** wrapping this folder — 
 PyInstaller builds a native binary **on each OS**, so Mac/Linux binaries can't be made on a Windows
 machine. The included workflow does it for you in the cloud:
 
-`.github/workflows/build-app.yml` builds on `windows-latest`, `macos-latest`, and `ubuntu-latest`,
-zips each, and (when you publish a GitHub Release) attaches all three to it.
+`.github/workflows/build-app.yml` builds on `windows-latest`, `macos-latest` (one **universal2** app
+for Apple Silicon and Intel) and `ubuntu-22.04`, and when you publish a GitHub Release attaches:
+`PhenoCleaning-Setup.exe`, `PhenoCleaning-Windows-x64-portable.zip`,
+`PhenoCleaning-macOS-universal2-portable.zip` and `PhenoCleaning-Linux-x64-portable.zip`.
 
 1. Push this project to GitHub.
-2. **Actions → Build standalone apps → Run workflow** (or publish a Release).
-3. Download `PhenoCleaning-Windows.zip`, `PhenoCleaning-macOS.zip`, `PhenoCleaning-Linux.zip` from the run's artifacts
-   (or the Release).
+2. Publish a Release (or **Actions → Build standalone apps → Run workflow** for a test build).
+3. The files appear on the Release a few minutes later (or under the run's artifacts).
 
 ### Platform notes
 - **Windows:** users may see a SmartScreen "unknown publisher" prompt (unsigned) → *More info → Run anyway*.
@@ -52,8 +57,9 @@ zips each, and (when you publish a GitHub Release) attaches all three to it.
 
 ---
 
-## What's excluded (and why the build is ~300 MB not multi-GB)
-The spec **excludes** `torch`, `tensorflow`, `jax`, `IPython`/notebook, and GUI toolkits — they may be
-installed on your dev machine but the app never uses them, and torch in particular broke the Windows
-build with over-long paths. If you add a feature that needs a new library, add it to `requirements.txt`
+## What's included and excluded
+The app needs only streamlit, numpy, pandas, matplotlib, pillow and openpyxl (`requirements.txt`).
+The spec **excludes** `torch`, `tensorflow`, `jax`, `scipy`, `IPython`/notebook, and GUI toolkits —
+they may be installed on your dev machine but the app never uses them, and torch in particular broke
+the Windows build with over-long paths. If you add a feature that needs a new library, add it to `requirements.txt`
 and (if PyInstaller misses it) to `hiddenimports` in `phenocleaning.spec`, then rebuild.

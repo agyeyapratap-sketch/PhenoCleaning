@@ -43,25 +43,39 @@ unidentified developer — see `PUBLISHING.md` for code-signing/notarization not
 ## System requirements
 
 **To run the app (end users):**
-- **OS:** Windows 10/11 (64-bit) · macOS 12+ (a single **universal2** build runs natively on both
-  Apple Silicon and Intel) · Linux 64-bit with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+).
-- **CPU:** Windows/Linux any 64-bit x86-64 processor; macOS runs natively on Apple Silicon and Intel.
-- **RAM:** 8 GB minimum; **16 GB recommended** for 3D point-cloud viewing/cleaning and batch processing.
-- **Disk:** ~350 MB for the installed app, plus room for your data and cleaned/exported files.
-- **Browser:** the app opens in your default browser (Chrome, Edge, Firefox, or Safari); a
-  1280×800 or larger window is comfortable.
-- **GPU:** not required (CPU only). **Internet:** not required to run — only to download the app.
-- **Network:** uses local port `8501` (falls back to the next free port). Network-drive data needs
-  the drive mapped/reachable on your machine (VPN/campus as applicable).
 
-**To run from source (developers):** Python 3.12+ with the packages in `requirements.txt`.
+| | Minimum | Recommended |
+|---|---|---|
+| **OS** | Windows 10 (64-bit) · macOS 12 · Linux with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9+) | Windows 11 · current macOS |
+| **CPU** | any 64-bit processor (x86-64; Apple Silicon or Intel Mac — one universal2 build) | a recent 4-core+ laptop or desktop |
+| **RAM** | 4 GB | 8 GB |
+| **Disk** | ~300 MB for the app | plus room for your data and exported animations (GIFs are ~0.1–1 MB each) |
+| **Display** | 1280 × 800 | 1920 × 1080 |
+| **GPU** | not used | — |
+
+- **No other software needed.** The installer includes everything; you do **not** need Python,
+  ffmpeg, Open3D or a graphics card. Animations are saved as GIFs, which open in any browser and
+  drop straight into PowerPoint, Keynote or Google Slides.
+- **Browser:** the app opens in your default browser — Chrome, Edge, Firefox or Safari (current versions).
+- **Speed:** cleaning and charting the tabular data is instant. In the 3D viewer, a still view takes
+  about a second; animations take a few seconds up to ~30 s on a typical laptop (spinning through
+  time is the slowest).
+- **Internet:** not needed to run — only to download the app. Everything stays on your computer.
+- **Network drives:** data on a mapped/network drive works (VPN/campus connection as applicable).
+  The 3D viewer reads `.ply` files on demand, so for large experiments it is faster to copy the
+  `.ply` folder to your own disk first.
+- **Port:** the app uses local port `8501` (or the next free one).
+
+**To run from source (developers):** Python 3.12 with the pinned packages in `requirements.txt`
+(streamlit, numpy, pandas, matplotlib, pillow, openpyxl).
 
 **To build the standalone apps (maintainers):** Python 3.12 + PyInstaller (+ Inno Setup on Windows),
 or just use the GitHub Actions workflow. See `packaging/README.md`.
 
-**Input data it accepts:** TraitFinder tabular exports (`*_PlantEye.csv` or `.zip`); optionally
-binary PlantEye `.ply` point clouds, an `.xlsx` design workbook, and an `.xlsx` manual-measurements
-workbook. No data is bundled — you point the app at your own folders.
+**Input data it accepts:** TraitFinder tabular exports (`*_PlantEye.csv` or `.zip`); optionally the
+PlantEye 3D files (`<carrier>_<time>_full.ply` whole-carrier scans or `…_unitfile_N_1.ply` per-plant
+scans, as downloaded with the portal's 3D downloader), an `.xlsx` design workbook, and an `.xlsx`
+manual-measurements workbook. No data is bundled — you point the app at your own folders.
 
 ## Run from source (developers)
 ```bash
