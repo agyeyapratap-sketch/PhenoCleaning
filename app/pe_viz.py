@@ -133,22 +133,38 @@ def point_colors(pts: np.ndarray, key: str, norm=None, brighten: float = 1.6) ->
 
 # ---------------------------------------------------------------------------- loading
 
-def plant_positions(verts: np.ndarray) -> dict:
-    """``unit_id`` → carrier position (1..n), by order along the carrier (y)."""
+def plant_positions(verts: np.ndarray, n_rows: int = 1) -> dict:
+    """``unit_id`` → (column, row) on the carrier. Columns run along the carrier (y). With
+    ``n_rows`` > 1 the plants are first split into rows across the carrier (x, split at the widest
+    gaps between plant centres; row 1 = smaller x), then numbered along y within each row."""
     uid = verts["unit_id"]
-    y = verts["y"].astype(np.float64)
-    order = sorted(np.unique(uid), key=lambda u: y[uid == u].mean())
-    return {int(u): i + 1 for i, u in enumerate(order)}
+    units = np.unique(uid)
+    cy = {int(u): float(verts["y"][uid == u].mean()) for u in units}
+    cx = {int(u): float(verts["x"][uid == u].mean()) for u in units}
+    n_rows = max(1, min(int(n_rows or 1), len(units)))
+    if n_rows == 1:
+        order = sorted(cy, key=cy.get)
+        return {u: (i + 1, 1) for i, u in enumerate(order)}
+    by_x = sorted(cx, key=cx.get)
+    xs = np.array([cx[u] for u in by_x])
+    cuts = sorted(np.argsort(np.diff(xs))[-(n_rows - 1):] + 1) if len(xs) > 1 else []
+    rows = np.split(np.array(by_x), cuts)
+    out = {}
+    for r, members in enumerate(rows, start=1):
+        for c, u in enumerate(sorted(members.tolist(), key=cy.get), start=1):
+            out[int(u)] = (c, r)
+    return out
 
 
-def load_plant(row, position: int | None):
+def load_plant(row, position: int | None, plant_row: int = 1, n_rows: int = 1):
     """Points (and mesh faces) for one plant from an inventory row: a per-plant ``unitfile`` is
-    the plant; a ``_full`` carrier file is cut to the plant at ``position`` (None = whole carrier)."""
+    the plant; a ``_full`` carrier file is cut to the plant at (``position``, ``plant_row``)
+    (``position`` None = whole carrier). ``n_rows`` = rows of pots on that carrier."""
     verts, faces, _, _ = pe_data.read_ply_lenient(row["path"])
     if row.get("kind") == "unitfile" or position is None:
         return verts, faces
-    pos = plant_positions(verts)
-    want = [u for u, p in pos.items() if p == int(position)]
+    pos = plant_positions(verts, n_rows)
+    want = [u for u, cr in pos.items() if cr == (int(position), int(plant_row))]
     if not want:
         return verts[:0], None
     m = verts["unit_id"] == want[0]
@@ -161,44 +177,54 @@ def load_plant(row, position: int | None):
 
 def plant_options(inventory: pd.DataFrame, tabular: pd.DataFrame | None,
                   status: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Every plant that has at least one 3D scan: block, position, label (with genotype /
-    treatment when the export is loaded), and how many dates it was scanned on. With ``status``
-    (from :func:`pe_data.ply_status`) only scans that survive the cleaning count."""
+    """Every plant that has at least one 3D scan: block, position (column), row, label (full
+    ``barcode:column:row`` ID with genotype / treatment when the export is loaded), and how many
+    dates it was scanned on. With ``status`` (from :func:`pe_data.ply_status`) only scans that
+    survive the cleaning count."""
     if status is not None:
         ok = status[status["status"] != "excluded"]
         d = ok[["block", "position", "local"]].copy()
+        d["row"] = ok["row"] if "row" in ok else 1
     else:
         recs = []
         for _, r in inventory.iterrows():
             if r["kind"] == "unitfile":
-                recs.append((int(r["block"]), int(r["unit_n"]), r["local"]))
+                rw = int(r["unit_row"]) if pd.notna(r.get("unit_row")) else 1
+                recs.append((int(r["block"]), int(r["unit_n"]), rw, r["local"]))
             else:
                 for p in range(1, 5):
-                    recs.append((int(r["block"]), p, r["local"]))
-        d = pd.DataFrame(recs, columns=["block", "position", "local"])
+                    recs.append((int(r["block"]), p, 1, r["local"]))
+        d = pd.DataFrame(recs, columns=["block", "position", "row", "local"])
     if d.empty:
-        return pd.DataFrame(columns=["block", "position", "dates", "label"])
-    d = d.groupby(["block", "position"]).agg(dates=("local", lambda s: s.dt.normalize().nunique())).reset_index()
+        return pd.DataFrame(columns=["block", "position", "row", "dates", "label"])
+    d = (d.groupby(["block", "position", "row"])
+          .agg(dates=("local", lambda s: s.dt.normalize().nunique())).reset_index())
     lab = {}
     if tabular is not None and len(tabular) and {"block", "position"} <= set(tabular.columns):
-        t = tabular.drop_duplicates(["block", "position"])
+        t = tabular.copy()
+        if "row" not in t:
+            t["row"] = 1
+        t = t.drop_duplicates(["block", "position", "row"])
         for _, r in t.iterrows():
             bits = [str(r[c]) for c in ("genotype", "treatment") if c in t and pd.notna(r[c])]
-            lab[(int(r["block"]), int(r["position"]))] = (" / ".join(bits), bool(r.get("is_blank", False)))
-        d = d[[(b, p) in lab and not lab[(b, p)][1] for b, p in zip(d["block"], d["position"])]]
-    d["label"] = [f"{b}:{p}" + (f" — {lab[(b, p)][0]}" if (b, p) in lab and lab[(b, p)][0] else "")
+            lab[(int(r["block"]), int(r["position"]), int(r["row"]))] = (" / ".join(bits),
+                                                                       bool(r.get("is_blank", False)))
+        d = d[[k in lab and not lab[k][1] for k in zip(d["block"], d["position"], d["row"])]]
+    d["label"] = [pe_data.plant_label(b, p, rw)
+                  + (f" — {lab[(b, p, rw)][0]}" if (b, p, rw) in lab and lab[(b, p, rw)][0] else "")
                   + f"  ({n} date{'s' if n != 1 else ''})"
-                  for b, p, n in zip(d["block"], d["position"], d["dates"])]
+                  for b, p, rw, n in zip(d["block"], d["position"], d["row"], d["dates"])]
     return d.reset_index(drop=True)
 
 
-def plant_series(inventory: pd.DataFrame, block: int, position: int, max_points: int = 40000,
-                 allowed_paths=None):
-    """[(local time, points)] for one plant across every scan date, oldest first. With
-    ``allowed_paths`` only those files are used (the scans kept by the cleaning); one scan per date
-    (the latest, if more than one remains)."""
+def plant_series(inventory: pd.DataFrame, block: int, position: int, plant_row: int = 1,
+                 max_points: int = 40000, allowed_paths=None, n_rows: int = 1):
+    """[(local time, points)] for one plant (carrier ``block``, ``position`` = column,
+    ``plant_row``) across every scan date, oldest first. With ``allowed_paths`` only those files are
+    used (the scans kept by the cleaning); one scan per date (the latest, if more than one remains)."""
     inv = inventory[inventory["block"] == block].copy()
-    inv = inv[(inv["kind"] == "full") | (inv["unit_n"] == position)]
+    rows = inv["unit_row"].fillna(1) if "unit_row" in inv else 1
+    inv = inv[(inv["kind"] == "full") | ((inv["unit_n"] == position) & (rows == plant_row))]
     if allowed_paths is not None:
         allowed = {str(a) for a in allowed_paths}
         inv = inv[inv["path"].astype(str).isin(allowed)]
@@ -206,7 +232,7 @@ def plant_series(inventory: pd.DataFrame, block: int, position: int, max_points:
     out = []
     rng = np.random.default_rng(0)
     for _, r in inv.iterrows():
-        pts, _ = load_plant(r, position)
+        pts, _ = load_plant(r, position, plant_row, n_rows)
         if len(pts) < 10:
             continue
         if len(pts) > max_points:
@@ -525,3 +551,134 @@ def trait_chart_gif(d: pd.DataFrame, trait: str, group: str | None = None, *, si
         if progress:
             progress((i + 1) / len(days))
     return _gif(frames, fps, hold_last)
+
+
+# ------------------------------------------------------------------ publication trait plot
+
+ERROR_BARS = {"Standard error (SE)": "se", "Standard deviation (SD)": "sd",
+              "95% confidence interval": "ci95", "None": "none"}
+
+
+def group_colors(n: int) -> list:
+    """The app's 8-colour series palette, extended with tab20 for more groups."""
+    if n <= len(SERIES_COLORS):
+        return SERIES_COLORS[:n]
+    from matplotlib import colormaps
+    cm = colormaps["tab20"]
+    return [cm(i % 20) for i in range(n)]
+
+
+def trait_figure(d: pd.DataFrame, trait: str, group: str | None = None, *,
+                 show_points: bool = False, flagged: pd.DataFrame | None = None,
+                 outlier_mode: str = "show", error: str = "se", x_mode: str = "days",
+                 width_cm: float = 16.0, height_cm: float = 9.0, font_pt: float = 10.0,
+                 line_w: float = 1.5, marker: float = 5.0, point_size: float = 10.0,
+                 title: str = "", xlabel: str | None = None, ylabel: str | None = None,
+                 legend: str = "right", grid: bool = False):
+    """Mean ± error per date (per group) on a true elapsed-time axis, sized for publication.
+
+    ``d`` holds only the rows to plot (already filtered to the chosen groups / levels). Individual
+    scans (``show_points``) are drawn in their own group's colour, slightly dodged so groups don't
+    overlap. ``flagged`` = rows (``unit`` + ``date``) suggested as outliers: ``outlier_mode`` is
+    'show' (ignore the flags), 'highlight' (ring them in red) or 'exclude' (leave them out of the
+    points AND the means). Returns ``(figure, summary table)``; the figure is a plain matplotlib
+    Figure, so it saves to PNG/PDF/SVG at any DPI with the text size exactly as previewed."""
+    from matplotlib.figure import Figure
+    d = d.dropna(subset=[trait]).copy()
+    d["elapsed"] = (d["date"] - d["date"].min()).dt.days
+    d["_flag"] = False
+    if flagged is not None and len(flagged) and {"unit", "date"} <= set(flagged.columns):
+        fl = set(zip(flagged["unit"].astype(str), pd.to_datetime(flagged["date"]).dt.normalize()))
+        d["_flag"] = [(str(u), pd.Timestamp(t).normalize()) in fl for u, t in zip(d["unit"], d["date"])]
+    if outlier_mode == "exclude":
+        d = d[~d["_flag"]]
+    d["_g"] = d[group].astype(str) if group else "all plants"
+    groups = sorted(d["_g"].unique(), key=lambda g: (g == "nan", g))
+    colors = dict(zip(groups, group_colors(len(groups))))
+
+    stats = d.groupby(["_g", "elapsed"])[trait].agg(["mean", "std", "sem", "count"]).reset_index()
+    half = {"se": stats["sem"], "sd": stats["std"], "ci95": 1.96 * stats["sem"]}.get(error)
+    stats["err"] = half.fillna(0) if half is not None else 0.0
+
+    days = sorted(d["elapsed"].unique())
+    gap = float(np.min(np.diff(days))) if len(days) > 1 else 1.0
+    span = 0.28 * gap
+    offs = {g: (np.linspace(-span / 2, span / 2, len(groups))[k] if len(groups) > 1 else 0.0)
+            for k, g in enumerate(groups)}
+
+    fig = Figure(figsize=(width_cm / 2.54, height_cm / 2.54))
+    ax = fig.add_subplot(111)
+    rng = np.random.default_rng(0)
+    for g in groups:
+        col = colors[g]
+        if show_points or outlier_mode == "highlight":
+            pts = d[d["_g"] == g]
+            if not show_points:
+                pts = pts[pts["_flag"]]
+            x = pts["elapsed"] + offs[g] + rng.uniform(-0.25, 0.25, len(pts)) * (span / max(len(groups), 1))
+            ax.scatter(x, pts[trait], s=point_size, color=col, alpha=0.45, linewidths=0, zorder=2)
+            if outlier_mode == "highlight":
+                hl = pts["_flag"].to_numpy()
+                ax.scatter(x[hl], pts.loc[hl, trait], s=point_size * 3.5, facecolors="none",
+                           edgecolors="#d62728", linewidths=1.0, zorder=4)
+        s = stats[stats["_g"] == g]
+        ax.errorbar(s["elapsed"] + offs[g], s["mean"], yerr=s["err"] if error != "none" else None,
+                    marker="o", ms=marker, lw=line_w, capsize=2 if error != "none" else 0,
+                    elinewidth=max(0.6, line_w * 0.7), color=col, mec="white", mew=0.6,
+                    label=g, zorder=3)
+    ax.spines[["top", "right"]].set_visible(False)
+    if grid:
+        ax.grid(color="#e4e3df", lw=0.6)
+        ax.set_axisbelow(True)
+    if x_mode == "date":
+        first = d.groupby("elapsed")["date"].first()
+        ax.set_xticks(list(first.index))
+        # rotate when the closest two dates are nearer than one label's width (~6 characters)
+        axis_pt = width_cm / 2.54 * 72 * 0.75
+        crowded = (len(days) > 1 and
+                   gap / max(days[-1] - days[0], 1) * axis_pt < 6 * 0.62 * font_pt * 0.9 * 1.15)
+        ax.set_xticklabels([pd.Timestamp(t).strftime("%d %b") for t in first.values],
+                           rotation=45 if crowded else 0, ha="right" if crowded else "center")
+        ax.set_xlabel(xlabel if xlabel is not None else "scan date", fontsize=font_pt)
+    else:
+        ax.set_xlabel(xlabel if xlabel is not None else "days elapsed", fontsize=font_pt)
+    # large values: put the power of ten in the axis label instead of matplotlib's floating '1e7'
+    ylab = ylabel if ylabel is not None else trait
+    top = float(np.nanmax(np.abs(ax.get_ylim()))) if len(d) else 0.0
+    if top >= 1e4:
+        from matplotlib.ticker import FuncFormatter
+        k = int(np.floor(np.log10(top)) // 3 * 3)
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v / 10 ** k:g}"))
+        ylab = f"{ylab} (×10$^{{{k}}}$)"
+    ax.set_ylabel(ylab, fontsize=font_pt)
+    ax.tick_params(labelsize=font_pt * 0.9)
+    if title:
+        ax.set_title(title, fontsize=font_pt * 1.1, loc="left")
+    if group and legend != "none":
+        kw = dict(title=group, fontsize=font_pt * 0.85, title_fontsize=font_pt * 0.9, frameon=False)
+        if legend == "right":
+            ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), **kw)
+        elif legend == "below":
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18),
+                      ncol=min(len(groups), 4), **kw)
+        else:
+            ax.legend(loc="best", **kw)
+    fig.tight_layout()
+    gname = group or "group"
+    summary = stats.rename(columns={"_g": gname, "elapsed": "days_elapsed", "count": "n",
+                                    "std": "SD", "sem": "SE"})[[gname, "days_elapsed", "n", "mean", "SD", "SE"]]
+    return fig, summary
+
+
+def figure_bytes(fig, fmt: str, dpi: int = 300) -> bytes:
+    """Save a figure as PNG / PDF / SVG. Text stays editable in PDF/SVG (TrueType fonts), and the
+    page size is the figure size you chose, so the text size is exactly as previewed."""
+    import matplotlib
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    if fig.canvas is None or not hasattr(fig.canvas, "print_figure"):
+        FigureCanvasAgg(fig)
+    buf = io.BytesIO()
+    with matplotlib.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "none"}):
+        fig.savefig(buf, format=fmt, dpi=dpi, bbox_inches="tight", pad_inches=0.05,
+                    facecolor="white")
+    return buf.getvalue()

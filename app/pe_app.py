@@ -26,13 +26,32 @@ import pe_design
 import pe_qc
 import pe_viz
 
+__version__ = "1.2.0"
+
 st.set_page_config(page_title="PhenoCleaning", layout="wide", page_icon="🌱")
 
 SS = st.session_state
 for k, v in dict(insts=None, union=None, base_union=None, candidates=None, design=None,
                  gt=None, gt_join=None, drop=set(), decisions={}, audit=[], splits=[],
-                 hidden_factors=[], remove_blanks=True, anim={}).items():
+                 hidden_factors=[], remove_blanks=True, anim={}, flash=None,
+                 ply_offset=None).items():
     SS.setdefault(k, v)
+
+FOLDER_LAYOUT = """\
+MyExperiment/                         ← enter THIS folder in the sidebar
+├── Group2/                           ← one sub-folder per export, named after it
+│   ├── PHENO-0023_Group2_PlantEye.csv    (or the .zip from the portal)
+│   └── 3D/                           ← optional: that export's .ply files
+├── Group3/
+│   └── PHENO-0023_Group3_PlantEye.csv
+└── Group4/ …"""
+
+FOLDER_HELP = (
+    "**Several exports of one experiment** (e.g. one per pot height) are combined into one dataset. "
+    "Put each export in its **own sub-folder named after it**, inside one experiment folder, and enter "
+    "the experiment folder above. The sub-folder names label each export everywhere in the app and in "
+    "the `source_instance` column of the combined CSV. Exports placed loose in one folder also work — "
+    "they are then labelled by file name.")
 
 SEV = {"blocker": "🟥", "flag": "🟧", "warn": "🟨", "info": "🟦", "ok": "🟩"}
 
@@ -102,42 +121,130 @@ def show_anim(name: str):
 
 
 @st.cache_data(show_spinner=False)
-def ply_inventory(folder: str) -> pd.DataFrame:
-    return pe_data.discover_ply(folder)
+def ply_inventory(folder: str, offset: float = 0.0) -> pd.DataFrame:
+    """3D files with ``local`` = UTC + ``offset`` hours (see :func:`ply_offset`)."""
+    return pe_data.with_offset(pe_data.discover_ply(folder), offset)
 
 
-@st.cache_data(show_spinner=False, max_entries=64)
-def plant_series(folder: str, block: int, position: int, allowed: tuple):
-    return pe_viz.plant_series(ply_inventory(folder), block, position, allowed_paths=allowed)
+@st.cache_data(show_spinner=False)
+def ply_skipped(folder: str) -> list:
+    return pe_data.skipped_ply(folder)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def scan_status(folder: str, kept: pd.DataFrame, candidates: pd.DataFrame) -> pd.DataFrame:
-    """Which plant in which .ply survives the cleaning (kept / excluded / not in exports)."""
-    return pe_data.ply_status(ply_inventory(folder), kept, candidates)
+def detected_offset(folder: str, candidates: pd.DataFrame) -> tuple:
+    return pe_data.detect_utc_offset(ply_inventory(folder), candidates)
 
 
-def current_status(folder: str) -> pd.DataFrame:
+def ply_offset(folder: str) -> tuple:
+    """(hours, matched fraction, auto?) — the scanner's offset from UTC, auto-detected by lining the
+    3D files up with the scans unless the user has set it under 3D settings."""
     cand = SS.candidates if SS.candidates is not None else candidates_frame()
-    return scan_status(folder, clean_rows(), cand)
+    auto, frac = detected_offset(folder, cand)
+    if SS.ply_offset is not None:
+        return float(SS.ply_offset), frac, False
+    return auto, frac, True
 
 
-def allowed_files(status: pd.DataFrame, block: int, position: int) -> tuple:
+@st.cache_data(show_spinner=False, max_entries=64)
+def plant_series(folder: str, offset: float, block: int, position: int, row: int, allowed: tuple,
+                 n_rows: int):
+    return pe_viz.plant_series(ply_inventory(folder, offset), block, position, row,
+                               allowed_paths=allowed, n_rows=n_rows)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def scan_status(folder: str, offset: float, kept: pd.DataFrame, candidates: pd.DataFrame) -> pd.DataFrame:
+    """Which plant in which .ply survives the cleaning (kept / excluded / not in exports)."""
+    return pe_data.ply_status(ply_inventory(folder, offset), kept, candidates)
+
+
+def current_status(folder: str, offset: float) -> pd.DataFrame:
+    cand = SS.candidates if SS.candidates is not None else candidates_frame()
+    return scan_status(folder, offset, clean_rows(), cand)
+
+
+def allowed_files(status: pd.DataFrame, block: int, position: int, row: int) -> tuple:
     ok = status[(status["block"] == block) & (status["position"] == position)
-                & (status["status"] != "excluded")]
+                & (status["row"] == row) & (status["status"] != "excluded")]
     return tuple(sorted(ok["path"].astype(str).unique()))
+
+
+def rows_on_carrier(block: int) -> int:
+    """How many rows of pots this carrier has (1 for the usual single row; 2 for e.g. 4×2 = 8)."""
+    u = SS.union
+    if u is None or "row" not in u:
+        return 1
+    r = u.loc[u["block"] == block, "row"]
+    return int(r.max()) if len(r) else 1
+
+
+def rescan_resolver(prefix: str, only_unresolved: bool = False) -> int:
+    """One choice per carrier scanned more than once on a day: keep one scan, or drop them all.
+    The suggested scan (fewest pots reading zero, then the later scan) is pre-selected, but nothing
+    counts as chosen until the user confirms it. Returns the number still unconfirmed."""
+    cand = SS.candidates if SS.candidates is not None else candidates_frame()
+    cr = pe_data.carrier_rescans(cand)
+    open_ = pe_data.unresolved_rescans(cand, SS.decisions)
+    open_keys = set(zip(open_["block"], open_["date"])) if len(open_) else set()
+    rows = open_ if only_unresolved else cr
+    multi_src = cand["source_instance"].nunique() > 1 if "source_instance" in cand else False
+    for _, row in rows.iterrows():
+        block, date = int(row["block"]), row["date"]
+        sub = cand[(cand["block"] == block) & (cand["date"] == pd.Timestamp(date))]
+        ch = pe_data.rescan_choices(cand, block, date)
+        opts, suggested = {}, 0
+        for i, c in ch.iterrows():
+            lab = (f"{pd.Timestamp(c['timestamp']):%H:%M:%S} — {c['pots']} pots"
+                   + (f", {c['failed']} read 0" if c["failed"] else "")
+                   + (f" [{c['source_instance']}]" if multi_src else "")
+                   + ("  ✓ suggested" if c["suggested"] else ""))
+            opts[lab] = (pd.Timestamp(c["timestamp"]), c["source_instance"])
+            if c["suggested"]:
+                suggested = i
+        drop_all = "Drop all — none of these scans is good"
+        opts[drop_all] = None
+        resolved = (block, date) not in open_keys
+        index = suggested
+        if resolved:
+            kept = [k for k, v in SS.decisions.items()
+                    if v.get("action") == "keep" and k in {row_scan_key(r) for _, r in sub.iterrows()}]
+            if not kept:
+                index = len(opts) - 1
+            else:
+                for j, v in enumerate(opts.values()):
+                    if v is not None and (str(v[1]), v[0].isoformat()) == (kept[0][0], kept[0][2]):
+                        index = j
+        cc = st.columns([5, 1])
+        choice = cc[0].radio(f"{'✅' if resolved else '⚠️'} Carrier **{block}** scanned {len(ch)}× on "
+                             f"**{date}** — keep:", list(opts), index=index,
+                             key=f"{prefix}cr_{block}_{date}", horizontal=True)
+        if cc[1].button("Update" if resolved else "Confirm", key=f"{prefix}crbtn_{block}_{date}",
+                        type="secondary" if resolved else "primary"):
+            target = opts[choice]
+            for _, r in sub.iterrows():
+                keep = (target is not None and pd.Timestamp(r["timestamp"]) == target[0]
+                        and r["source_instance"] == target[1])
+                set_decision(row_scan_key(r), "keep" if keep else "drop",
+                             note=f"carrier {block} {date}: {'keep' if keep else 'drop'} ({choice})")
+            rebuild()
+            log(f"Carrier {block} {date}: {choice}")
+            st.rerun()
+    return len(open_keys)
 
 
 # =========================================================================== sidebar
 st.sidebar.title("🌱 PhenoCleaning")
-st.sidebar.caption("clean · explore · animate")
+st.sidebar.caption(f"clean · explore · animate  ·  v{__version__}")
 
 # A convenience default folder can be set locally via the PLANTEYE_DEFAULT_FOLDER environment
 # variable (e.g. in run_app.bat); it is blank otherwise. Never hard-code a path — this ships publicly.
 EXAMPLE = os.environ.get("PLANTEYE_DEFAULT_FOLDER", "")
 folder = st.sidebar.text_input("Experiment folder", EXAMPLE,
                                help="A folder holding your TraitFinder exports (.csv or .zip) and, "
-                                    "optionally, the 3D .ply files. Sub-folders are searched too.")
+                                    "optionally, the 3D .ply files. Sub-folders are searched too. "
+                                    "Several exports of one experiment? Put each in its own sub-folder "
+                                    "named after it (e.g. Group2, Group3) inside this folder.")
 with st.sidebar.expander("More inputs (optional)", expanded=False):
     ply_folder = st.text_input("3D .ply folder (blank = experiment folder)", "")
     design_path = st.text_input("Design workbook (.xlsx)", "")
@@ -180,7 +287,17 @@ if SS.union is None:
         "2. **Time-series** — trait trajectories on a true elapsed-days axis, and animate them.\n"
         "3. **3D viewer** — view any scan in true colour or 20 reflectance indices, spin it, and "
         "animate a plant growing over time or several plants side by side.\n"
-        "4. **Export** — the cleaned dataset, your animations, and a log of every decision.")
+        "4. **Export** — the cleaned dataset, your figures and animations, and a log of every decision.")
+    st.subheader("How to organise your experiment folder")
+    st.markdown(FOLDER_HELP)
+    st.code(FOLDER_LAYOUT, language="text")
+    st.markdown(
+        "**Then:** check **Data → Duplicate scans** and confirm which scan to keep wherever a carrier was "
+        "scanned twice on a day (the combined CSV can't be downloaded until you have), remove any rogue "
+        "scans in **Advanced → Remove scans**, and optionally split your treatment label into factors in "
+        "**Advanced → Factors**.\n\n"
+        "**3D files:** both the *processed* whole-carrier files (`…_full.ply`) and the per-plant *unit* "
+        "files (`…_unitfile_<column>_<row>.ply`) work.")
     st.stop()
 
 tabs = st.tabs(["Data", "Time-series", "3D viewer", "Export", "Advanced"])
@@ -206,43 +323,35 @@ with tabs[0]:
     over = pe_data.overlapping_records([i for i in SS.insts if i.name not in SS.drop])
     if len(over):
         st.write(f"**{len(over)}** record(s) appear in more than one export. Identical copies are merged "
-                 "automatically; where values differ they are different scans — pick the keeper below.")
+                 "automatically; where values differ they are different scans — choose below.")
         with st.expander("Show these records"):
             st.dataframe(over, width="stretch", hide_index=True)
     cand = SS.candidates if SS.candidates is not None else candidates_frame()
     cr = pe_data.carrier_rescans(cand)
     if not len(cr) and not len(over):
         st.success("No duplicate scans found.")
-    for _, row in cr.iterrows():
-        block, date = int(row["block"]), row["date"]
-        sub = cand[(cand["block"] == block) & (cand["date"] == pd.Timestamp(date))]
-        opts = {}
-        for ts, s in sub.groupby("timestamp"):
-            src = s["source_instance"].iloc[0] if "source_instance" in s else ""
-            opts[f"{pd.Timestamp(ts):%H:%M:%S} — {s['unit'].nunique()} pots  [{src}]"] = ts
-        in_use = set(pd.to_datetime(SS.union.loc[(SS.union["block"] == block)
-                                                 & (SS.union["date"] == pd.Timestamp(date)), "timestamp"]))
-        current = next((i for i, ts in enumerate(opts.values()) if pd.Timestamp(ts) in in_use), 0)
-        cc = st.columns([3, 1])
-        choice = cc[0].radio(f"Carrier **{block}** scanned {len(opts)}× on **{date}** — keep:", list(opts),
-                             index=current, key=f"cr_{block}_{date}", horizontal=True)
-        if cc[1].button("Keep", key=f"crbtn_{block}_{date}"):
-            for _, r in sub[sub["timestamp"] == opts[choice]].iterrows():
-                set_decision(row_scan_key(r), "keep", note=f"carrier {block} {date}: keep {choice}")
-            for _, r in sub[sub["timestamp"] != opts[choice]].iterrows():
-                set_decision(row_scan_key(r), "drop", note=f"carrier {block} {date}: duplicate of {choice}")
-            rebuild()
-            log(f"Carrier {block} {date}: kept {choice}, dropped the other scan(s)")
-            st.rerun()
+    if len(cr):
+        n_open = len(pe_data.unresolved_rescans(cand, SS.decisions))
+        msg = (f"**{len(cr)}** carrier-day(s) were scanned more than once. For each, choose the scan to keep "
+               "(or drop them all if none is good) and press **Confirm**. The suggested scan — fewest pots "
+               "reading zero, then the later scan — is pre-selected.")
+        if n_open:
+            st.warning(msg + f"  \n**{len(cr) - n_open} of {len(cr)} confirmed** — the combined CSV can be "
+                       "downloaded once all are confirmed.")
+        else:
+            st.success(f"All {len(cr)} duplicate carrier-day(s) confirmed. You can change any choice below.")
+        rescan_resolver("d_")
 
     summ = pe_data.instance_summary(SS.insts)
     with st.expander(f"Exports in this experiment ({len(SS.insts)}) — choose which to combine"):
         st.dataframe(summ, width="stretch", hide_index=True)
         st.caption("An older, smaller copy of another export is excluded automatically.")
         drop = set()
-        for ins in [i for i in SS.insts if not i.is_stale]:
+        for i, ins in enumerate(SS.insts):
+            if ins.is_stale:
+                continue
             note = summ.loc[summ["export"] == ins.name, "note"].iloc[0]
-            if not st.checkbox(ins.name, value=(ins.name not in SS.drop), key=f"inc_{ins.name}",
+            if not st.checkbox(ins.name, value=(ins.name not in SS.drop), key=f"inc_{i}",
                                help=note or "included"):
                 drop.add(ins.name)
         if drop != SS.drop:
@@ -250,6 +359,9 @@ with tabs[0]:
             rebuild()
             log(f"Exports excluded: {sorted(drop) or 'none'}")
             st.rerun()
+    with st.expander("How should my experiment folder look?"):
+        st.markdown(FOLDER_HELP)
+        st.code(FOLDER_LAYOUT, language="text")
 
 # ---- Time-series ----------------------------------------------------------
 with tabs[1]:
@@ -259,39 +371,100 @@ with tabs[1]:
         st.warning("No numeric traits found.")
     else:
         pref = next((t for t in traits if "digital biomass" in t.lower()), traits[0])
+        facs = factor_options(u)
         c1, c2, c3 = st.columns(3)
         trait = c1.selectbox("Trait", traits, index=traits.index(pref))
-        gopts = ["(none)"] + factor_options(u)
-        groupby = c2.selectbox("Group by", gopts, index=min(1, len(gopts) - 1))
-        filt = c3.selectbox("Show only", ["(all)"] + factor_options(u))
+        gopts = ["(none)"] + facs
+        groupby = c2.selectbox("Group by", gopts, index=min(1, len(gopts) - 1),
+                               help="Any label column, including factors you defined in Advanced → Factors.")
+        filt = c3.selectbox("Filter by", ["(all)"] + facs)
         d = u
         if filt != "(all)":
-            lvl = st.selectbox(f"{filt} =", sorted(d[filt].dropna().astype(str).unique()))
-            d = d[d[filt].astype(str) == lvl]
+            lv_all = sorted(d[filt].dropna().astype(str).unique())
+            lv = st.multiselect(f"Show only these {filt} levels", lv_all, default=lv_all[:1], key=f"ts_filt_lv_{filt}")
+            d = d[d[filt].astype(str).isin(lv)]
+        grp = groupby if groupby != "(none)" else None
+        if grp:
+            g_all = sorted(d[grp].dropna().astype(str).unique())
+            g_keep = st.multiselect(f"{grp} groups to show", g_all, default=g_all, key=f"ts_groups_{grp}")
+            d = d[d[grp].astype(str).isin(g_keep)]
         d = d.dropna(subset=[trait]).copy()
-        d["elapsed"] = (d["date"] - d["date"].min()).dt.days
+
+        o1, o2, o3, o4 = st.columns([1.1, 1.6, 1.1, 1.2])
+        show_pts = o1.checkbox("Show individual scans", value=False,
+                               help="Each scan of the plotted plants, in its group's colour.")
+        omode = o2.radio("Suggested outliers", ["Off", "Highlight", "Exclude"], horizontal=True,
+                         help="Off = plot every scan as it is. Highlight = ring the scans that sit far "
+                              "from the same plant's neighbouring dates. Exclude = leave them out of the "
+                              "points and the means (nothing is removed from your data).")
+        sens = o3.slider("Sensitivity", 1, 10, 5, disabled=omode == "Off",
+                         help="Higher flags more scans.")
+        no_zero = o4.checkbox("Leave out zero readings", value=False,
+                              help="Scans where this trait reads 0 (usually a failed scan or an empty pot).")
+        if no_zero:
+            d = d[pd.to_numeric(d[trait], errors="coerce") != 0]
+        flagged = None
+        if omode != "Off":
+            flagged = pe_qc.timeseries_outliers(clean_rows()[lambda x: ~x["is_blank"]], trait,
+                                                k=6.0 - 0.45 * sens)
+            in_plot = (flagged.merge(d[["unit", "date"]].assign(date=d["date"].dt.strftime("%Y-%m-%d")),
+                                     on=["unit", "date"]) if len(flagged) else flagged)
+            st.caption(f"{len(in_plot)} suggested outlier scan(s) among the plotted plants "
+                       f"({'ringed in red' if omode == 'Highlight' else 'left out'}). Review or drop them "
+                       "for good in **Advanced → Outliers**.")
+
+        with st.expander("Figure size, text & export (publication quality)"):
+            f1, f2, f3, f4 = st.columns(4)
+            width_cm = f1.number_input("Width (cm)", 5.0, 40.0, 17.0, 0.5,
+                                       help="Single journal column ≈ 8.5 cm, full page width ≈ 17.5 cm.")
+            shape = f2.selectbox("Aspect ratio", ["16:9 (wide)", "4:3", "3:2", "1:1 (square)", "3:4 (tall)",
+                                                  "Custom height"], index=2)
+            ratios = {"16:9 (wide)": 16 / 9, "4:3": 4 / 3, "3:2": 3 / 2, "1:1 (square)": 1.0, "3:4 (tall)": 3 / 4}
+            if shape == "Custom height":
+                height_cm = f3.number_input("Height (cm)", 3.0, 40.0, 10.0, 0.5)
+            else:
+                height_cm = round(width_cm / ratios[shape], 2)
+                f3.metric("Height (cm)", f"{height_cm:g}")
+            font_pt = f4.number_input("Text size (pt)", 5.0, 24.0, 10.0, 0.5,
+                                      help="Axis labels; tick labels and legend scale with it. Journals "
+                                           "usually ask for 7–10 pt at final size.")
+            g1, g2, g3, g4 = st.columns(4)
+            line_w = g1.number_input("Line width", 0.3, 5.0, 1.5, 0.1)
+            marker = g2.number_input("Marker size", 0.0, 15.0, 5.0, 0.5)
+            point_size = g3.number_input("Scan point size", 1.0, 60.0, 10.0, 1.0)
+            dpi = g4.select_slider("PNG resolution (dpi)", [150, 300, 600, 1200], 300)
+            h1, h2, h3, h4 = st.columns(4)
+            err_lab = h1.selectbox("Error bars", list(pe_viz.ERROR_BARS))
+            x_mode = h2.selectbox("x axis", ["Days elapsed", "Scan date"])
+            legend = h3.selectbox("Legend", ["right", "below", "best", "none"])
+            grid = h4.checkbox("Grid lines", value=False)
+            title = st.text_input("Title (optional)", "")
+            j1, j2 = st.columns(2)
+            xlabel = j1.text_input("x-axis label", "days elapsed" if x_mode == "Days elapsed" else "scan date")
+            ylabel = j2.text_input("y-axis label", trait)
         if d.empty:
             st.warning("No data for that selection.")
         else:
-            show_pts = st.checkbox("Show individual plants", value=False)
-            fig, ax = plt.subplots(figsize=(9, 4.2))
-            if show_pts:
-                ax.scatter(d["elapsed"], d[trait], s=8, alpha=0.25, color="0.55", zorder=1)
-            grp = groupby if groupby != "(none)" else None
-            for k, (g, sub) in enumerate(d.groupby(grp) if grp else [("all", d)]):
-                m = sub.groupby("elapsed")[trait].agg(["mean", "sem"])
-                ax.errorbar(m.index, m["mean"], yerr=m["sem"], marker="o", capsize=2, lw=2,
-                            color=pe_viz.SERIES_COLORS[k % 8], label=str(g), zorder=3)
-            if grp:
-                ax.legend(title=grp, fontsize=8, ncol=2, frameon=False)
-            for e in sorted(d["elapsed"].unique()):
-                ax.axvline(e, color="0.93", lw=0.6, zorder=0)
-            ax.spines[["top", "right"]].set_visible(False)
-            ax.set_xlabel("days elapsed (real spacing between scans)"); ax.set_ylabel(trait)
-            fig.tight_layout(); st.pyplot(fig); plt.close(fig)
-            st.caption("Mean ± standard error per date. Odd points? Check them in **Advanced → Outliers**.")
-            if st.button("🎞 Animate this chart"):
-                name = re.sub(r"[^A-Za-z0-9]+", "_", f"{trait} by {grp or 'all'}").strip("_") + ".gif"
+            fig, summary = pe_viz.trait_figure(
+                d, trait, grp, show_points=show_pts, flagged=flagged, outlier_mode=omode.lower()
+                if omode != "Off" else "show", error=pe_viz.ERROR_BARS[err_lab],
+                x_mode="date" if x_mode == "Scan date" else "days", width_cm=width_cm, height_cm=height_cm,
+                font_pt=font_pt, line_w=line_w, marker=marker, point_size=point_size, title=title,
+                xlabel=xlabel, ylabel=ylabel, legend=legend, grid=grid)
+            st.image(pe_viz.figure_bytes(fig, "png", dpi=110))
+            err_note = {"se": "± standard error", "sd": "± standard deviation",
+                        "ci95": "± 95% confidence interval", "none": ""}[pe_viz.ERROR_BARS[err_lab]]
+            st.caption(f"Mean {err_note} per date; true spacing between scan dates. The preview is drawn at "
+                       "the size you set, so text appears exactly as in the exported file.")
+            stem = re.sub(r"[^A-Za-z0-9]+", "_", f"{trait} by {grp or 'all'}").strip("_")
+            e1, e2, e3, e4, e5 = st.columns(5)
+            e1.download_button("⬇ PNG", pe_viz.figure_bytes(fig, "png", dpi=dpi), f"{stem}.png", "image/png")
+            e2.download_button("⬇ PDF", pe_viz.figure_bytes(fig, "pdf"), f"{stem}.pdf", "application/pdf")
+            e3.download_button("⬇ SVG", pe_viz.figure_bytes(fig, "svg"), f"{stem}.svg", "image/svg+xml")
+            e4.download_button("⬇ Plotted values (CSV)", summary.to_csv(index=False).encode("utf-8"),
+                               f"{stem}_summary.csv", "text/csv")
+            if e5.button("🎞 Animate"):
+                name = stem + ".gif"
                 with st.spinner("Rendering…"):
                     keep_anim(name, pe_viz.trait_chart_gif(d, trait, grp))
                 SS["last_chart"] = name
@@ -300,19 +473,51 @@ with tabs[1]:
 
 # ---- 3D viewer ------------------------------------------------------------
 with tabs[2]:
-    inv = ply_inventory(PLY_DIR) if PLY_DIR and Path(PLY_DIR).exists() else pd.DataFrame()
+    has_ply = bool(PLY_DIR) and Path(PLY_DIR).exists()
+    inv = ply_inventory(PLY_DIR) if has_ply else pd.DataFrame()
+    skipped = ply_skipped(PLY_DIR) if has_ply else []
+    with st.expander("Which 3D files can I use?"):
+        st.markdown(pe_data.PLY_NAME_HELP)
+        if skipped:
+            st.warning(f"{len(skipped)} `.ply` file(s) skipped because their names aren't recognised:")
+            st.dataframe(pd.DataFrame({"skipped file": skipped}), width="stretch", hide_index=True)
     if not len(inv):
         st.info("No 3D `.ply` files found. They are searched for in the experiment folder, or set a "
-                "**3D .ply folder** under *More inputs* in the sidebar.")
+                "**3D .ply folder** under *More inputs* in the sidebar."
+                + (f" ({len(skipped)} `.ply` file(s) were found but have unrecognised names — see above.)"
+                   if skipped else ""))
     else:
-        status = current_status(PLY_DIR)
+        off, frac, auto = ply_offset(PLY_DIR)
+        inv = ply_inventory(PLY_DIR, off)
+        with st.expander(f"3D time matching — scanner clock UTC{off:+g} h "
+                         f"({'auto-detected' if auto else 'set by you'}; {frac:.0%} of 3D files matched a scan)",
+                         expanded=frac < 0.5):
+            st.caption("3D file names carry UTC time, the exports carry the scanner's local time. The offset "
+                       "that lines up the most 3D files with a scan is detected automatically (it handles any "
+                       "time zone and daylight saving). Override it only if the match rate is low.")
+            m1, m2 = st.columns([1, 1])
+            man = m1.number_input("Offset from UTC (hours)", -12.0, 14.0, float(off), 0.5, key="ply_off_in")
+            if m2.button("Use this offset"):
+                SS.ply_offset = man
+                log(f"3D time offset set to UTC{man:+g} h")
+                st.rerun()
+            if not auto and m2.button("Back to auto-detect"):
+                SS.ply_offset = None
+                st.rerun()
+        if frac < 0.5:
+            st.warning("Most 3D files don't line up with a scan in the exports, so the viewer can't tell which "
+                       "of them survived the cleaning. Check the time offset above, or that these 3D files "
+                       "belong to the loaded exports.")
+        status = current_status(PLY_DIR, off)
         plants = pe_viz.plant_options(inv, SS.union, status)
         n_ex = int((status["status"] == "excluded").sum())
         if n_ex:
             st.caption(f"Showing the scans in your cleaned data — {n_ex} plant scan(s) left out "
                        "(duplicates, blank pots or scans you dropped).")
-        series_of = lambda p: plant_series(PLY_DIR, int(p["block"]), int(p["position"]),
-                                           allowed_files(status, int(p["block"]), int(p["position"])))
+        series_of = lambda p: plant_series(
+            PLY_DIR, off, int(p["block"]), int(p["position"]), int(p["row"]),
+            allowed_files(status, int(p["block"]), int(p["position"]), int(p["row"])),
+            rows_on_carrier(int(p["block"])))
         mode = st.radio("Show", ["One scan", "Growth over time", "Compare plants"], horizontal=True,
                         label_visibility="collapsed")
         menu = pe_viz.index_menu()
@@ -411,16 +616,37 @@ with tabs[3]:
     u = clean_rows().copy()
     u["days_elapsed"] = (u["date"] - u["date"].min()).dt.days
     st.subheader("Cleaned dataset")
-    st.caption(f"{len(u)} rows · duplicates resolved · blank pots "
-               f"{'removed' if SS.remove_blanks else 'kept'}.")
+    cand_x = SS.candidates if SS.candidates is not None else candidates_frame()
+    open_x = pe_data.unresolved_rescans(cand_x, SS.decisions)
+    if len(open_x):
+        st.warning(f"**Choose the scans to combine first.** {len(open_x)} carrier-day(s) were scanned more "
+                   "than once and you haven't confirmed which scan to keep. Confirm each below (or under "
+                   "**Data → Duplicate scans**); the download unlocks when all are confirmed.")
+        rescan_resolver("x_", only_unresolved=True)
+    derived = [n for s in SS.splits for n in s["names"] if n in u.columns]
+    if derived:
+        inc_f = st.checkbox(f"Include the grouping factors you defined ({', '.join(derived)})", value=True,
+                            help="Added as extra columns, next to the label they were split from.")
+        if inc_f:
+            lead = [c for c in u.columns if c not in derived]
+            at = lead.index("treatment") + 1 if "treatment" in lead else len(lead)
+            u = u[lead[:at] + derived + lead[at:]]
+        else:
+            u = u.drop(columns=derived)
+    else:
+        st.caption("Tip: split a compound treatment label (e.g. `HT_BS_R1`) into separate factor columns in "
+                   "**Advanced → Factors** — they are then added to this CSV and can be used to group plots.")
+    n_drop = sum(v.get("action") == "drop" for v in SS.decisions.values())
+    st.caption(f"{len(u)} rows · {u['block'].nunique()} carriers · {u['date'].nunique()} dates · blank pots "
+               f"{'removed' if SS.remove_blanks else 'kept'} · {n_drop} scan(s) removed by your decisions.")
     st.download_button("⬇ Cleaned scans (CSV)", u.to_csv(index=False).encode("utf-8"),
-                       "phenocleaning_combined.csv", "text/csv", type="primary")
+                       "phenocleaning_combined.csv", "text/csv", type="primary", disabled=bool(len(open_x)))
     st.subheader("3D files")
     inv_x = ply_inventory(PLY_DIR) if PLY_DIR and Path(PLY_DIR).exists() else pd.DataFrame()
     if not len(inv_x):
         st.caption("No 3D `.ply` files found for this experiment.")
     else:
-        stx = current_status(PLY_DIR)
+        stx = current_status(PLY_DIR, ply_offset(PLY_DIR)[0])
         n_files = stx.groupby("path")["status"].apply(lambda s: (s == "kept").any())
         st.caption(f"{int(n_files.sum())} of {len(n_files)} `.ply` file(s) hold plants in the cleaned "
                    "dataset. Copy just those to a new folder — your original files are not touched.")
@@ -474,9 +700,14 @@ def render_finding(f):
 
 with tabs[4]:
     st.caption("Optional tools for deeper checks. Nothing here is needed for a basic clean-up.")
-    sub = st.tabs(["Factors", "Quality checks", "Missing data", "Outliers", "Design", "Ground truth"])
+    sub = st.tabs(["Factors", "Remove scans", "Quality checks", "Missing data", "Outliers", "Design",
+                   "Ground truth"])
+    sub = [sub[0], *sub[2:], sub[1]]   # keep the existing section order below; Remove scans is last
     with sub[0]:
         st.subheader("Define grouping factors (optional)")
+        if SS.flash:
+            st.success(SS.flash)
+            SS.flash = None
         st.caption("Every export carries two labels — **genotype** and **treatment** — that you set in the "
                    "portal. If you encoded several factors into one label (e.g. `61.BC.HT`), split it here "
                    "into named factors. Nothing about your design is assumed.")
@@ -501,7 +732,11 @@ with tabs[4]:
                                     [{"col": colc, "delim": delim, "names": nm}]
                         rebuild()
                         log(f"Split {colc} by '{delim}' into {nm}")
-                        st.success(f"Added factors: {', '.join(nm)}")
+                        # rerun so the Time-series and Export tabs (drawn earlier in this run) pick up
+                        # the new columns straight away — without it the export still served the old CSV
+                        SS.flash = (f"Added factors: {', '.join(nm)} — now available in Time-series → Group by "
+                                    "/ Filter by, and added to the exported CSV.")
+                        st.rerun()
                 else:
                     st.caption("No consistent delimiter found — this label is already a single factor.")
             if SS.splits:
@@ -635,7 +870,7 @@ with tabs[4]:
                 pool = pd.concat([an, outl], ignore_index=True) if len(an) or len(outl) else pd.DataFrame()
                 if len(pool):
                     pool = pool.drop_duplicates(subset=[c for c in ["unit", "timestamp"] if c in pool])
-                    pool["label"] = (pool["block"].astype(str) + ":" + pool["position"].astype(str)
+                    pool["label"] = (pool["unit"].astype(str)
                                      + " @ " + pool["date"].astype(str) + " " + pool["timestamp"].str[-8:]
                                      + " [" + pool.get("source_instance", "").astype(str) + "]")
                     chosen = st.multiselect("Select scans to act on", pool["label"].tolist(), key="cur_sel")
@@ -741,3 +976,69 @@ with tabs[4]:
                     st.warning(f"**{c.replace('manual_','')}** produced no numeric values"
                                + (f" ({n_nn} free-text entr(y/ies), coerced and flagged)." if n_nn else "."))
 
+    with sub[6]:
+        st.subheader("Remove bad scans")
+        st.caption("Take scans out of the analysis: a rogue or test scan, a carrier scanned by mistake, a dead "
+                   "or mislabelled plant, or a whole bad day. Choose any combination below — an empty box "
+                   "means *all*. Your files are never changed; every removal is logged and can be restored.")
+        cand_r = SS.candidates if SS.candidates is not None else candidates_frame()
+        if cand_r.empty:
+            st.info("Load an experiment first.")
+        else:
+            cr_dates = sorted(cand_r["date"].dropna().unique())
+            per_date = cand_r.groupby("date")["block"].nunique()
+            date_lab = {f"{pd.Timestamp(d):%Y-%m-%d}  ({per_date[d]} carrier{'s' if per_date[d] != 1 else ''})": d
+                        for d in cr_dates}
+            r1, r2, r3 = st.columns(3)
+            pick_d = r1.multiselect("Date(s)", list(date_lab), key="rm_dates")
+            pick_b = r2.multiselect("Carrier(s) / barcode(s)", sorted(cand_r["block"].unique().tolist()),
+                                    key="rm_blocks")
+            pool_p = cand_r if not pick_b else cand_r[cand_r["block"].isin(pick_b)]
+            pick_p = r3.multiselect("Plant(s)  barcode:column:row", sorted(pool_p["unit"].astype(str).unique()),
+                                    key="rm_plants", help="Leave empty for every plant on the chosen carriers.")
+            sel = cand_r
+            if pick_d:
+                sel = sel[sel["date"].isin([date_lab[x] for x in pick_d])]
+            if pick_b:
+                sel = sel[sel["block"].isin(pick_b)]
+            if pick_p:
+                sel = sel[sel["unit"].astype(str).isin(pick_p)]
+            if not (pick_d or pick_b or pick_p):
+                st.info("Pick at least one date, carrier or plant. Tip: **Advanced → Quality checks** flags "
+                        "dates on which only a few carriers were scanned.")
+            elif sel.empty:
+                st.warning("No scans match that selection.")
+            else:
+                already = {k for k, v in SS.decisions.items() if v.get("action") == "drop"}
+                keys = [row_scan_key(r) for _, r in sel.iterrows()]
+                new = [k for k in keys if k not in already]
+                size = pe_data.size_column(sel)
+                show = [c for c in ["unit", "timestamp", "genotype", "treatment", size, "source_instance"]
+                        if c and c in sel.columns]
+                st.write(f"**{len(sel)}** scan row(s) match ({len(sel) - len(new)} already removed):")
+                st.dataframe(sel[show].sort_values(["timestamp", "unit"]), width="stretch", hide_index=True,
+                             height=min(320, 38 + 35 * len(sel)))
+                reason = st.text_input("Reason (saved in the decision log)", "rogue scan", key="rm_reason")
+                if st.button(f"Remove {len(new)} scan(s)", type="primary", disabled=not new, key="rm_go"):
+                    for k in new:
+                        set_decision(k, "drop", note=f"removed: {reason}")
+                    rebuild()
+                    log(f"Removed {len(new)} scan(s) ({reason}): dates={pick_d or 'all'} "
+                        f"carriers={pick_b or 'all'} plants={pick_p or 'all'}")
+                    st.rerun()
+
+            drops = {k: v for k, v in SS.decisions.items() if v.get("action") == "drop"}
+            if drops:
+                st.markdown(f"#### Currently removed ({len(drops)} scan rows)")
+                tab = pd.DataFrame([{"plant": k[1], "scan time": k[2].replace("T", " "), "export": k[0],
+                                     "why": v.get("note", "")} for k, v in drops.items()])
+                st.dataframe(tab.sort_values(["scan time", "plant"]), width="stretch", hide_index=True,
+                             height=min(320, 38 + 35 * len(tab)))
+                labs = {f"{k[1]} @ {k[2].replace('T', ' ')} [{k[0]}]": k for k in drops}
+                back = st.multiselect("Restore these scans", list(labs), key="rm_restore")
+                if st.button("Restore selected", disabled=not back, key="rm_restore_go"):
+                    for lab in back:
+                        SS.decisions.pop(labs[lab], None)
+                    rebuild()
+                    log(f"Restored {len(back)} removed scan(s)")
+                    st.rerun()

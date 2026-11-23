@@ -37,6 +37,20 @@ def rule(t):
 rule("1. DISCOVER EXPORTS (.csv or .zip, deduped by content)")
 insts = pe_data.discover_instances(ROOT)
 print(pe_data.instance_summary(insts).to_string(index=False))
+_names = [i.name for i in insts]
+assert len(set(_names)) == len(_names), f"export names must be unique (crashed the app in v1.1): {_names}"
+print("export names unique: yes")
+
+# regression (v1.2): several exports loose in ONE folder must get distinct names
+with tempfile.TemporaryDirectory() as _tmp:
+    _src = next((i.path for i in insts if i.path.suffix.lower() == ".csv"), None)
+    if _src is not None:
+        import shutil
+        for _k in (1, 2):
+            shutil.copy(_src, Path(_tmp) / f"Exp{_k}_PlantEye.csv")
+        _two = pe_data.discover_instances(_tmp)
+        assert len({i.name for i in _two}) == len(_two), [i.name for i in _two]
+        print("two exports in one folder → distinct names: yes")
 
 rule("2. OVERLAPPING RECORDS (compared by value, not timestamp)")
 over = pe_data.overlapping_records([i for i in insts if not i.is_stale])
@@ -112,6 +126,18 @@ cr = pe_data.carrier_rescans(cand)
 print(f"carrier rescans (pre-dedup): {len(cr)}")
 if len(cr):
     print(cr.head(3).to_string(index=False))
+    _open = pe_data.unresolved_rescans(cand, {})
+    assert len(_open) == len(cr), "with no decisions every rescan must be unconfirmed"
+    _ch = pe_data.rescan_choices(cand, int(cr.iloc[0]["block"]), cr.iloc[0]["date"])
+    assert _ch["suggested"].sum() == 1
+    print("suggested keeper for the first rescan:\n" + _ch.to_string(index=False))
+    _dec = {}
+    for _, _r in cr.iterrows():
+        _sub = cand[(cand["block"] == _r["block"]) & (cand["date"] == pd.Timestamp(_r["date"]))]
+        for _, _x in _sub.iterrows():
+            _dec[pe_data.scan_key(_x["source_instance"], _x["unit"], _x["timestamp"])] = {"action": "drop"}
+    assert len(pe_data.unresolved_rescans(cand, _dec)) == 0, "confirming every rescan must resolve them"
+    print("confirming every rescan unlocks the export: yes")
 size = next((t for t in pe_data.measure_columns(uni) if "digital biomass" in t.lower()),
             pe_data.measure_columns(uni)[0])
 an = pe_qc.anomalous_scans(uni[~uni["is_blank"]], size)
@@ -130,10 +156,14 @@ import pe_viz  # noqa: E402
 _ply_dir = os.environ.get("PLANTEYE_TEST_PLY") or str(ROOT)
 inv = pe_data.discover_ply(_ply_dir)
 print(f"discover_ply: {len(inv)} scan file(s) ({inv['kind'].value_counts().to_dict() if len(inv) else {}})")
+print(f"skipped (unrecognised names): {len(pe_data.skipped_ply(_ply_dir))}")
 if len(inv):
+    _off, _frac = pe_data.detect_utc_offset(inv, cand)
+    print(f"scanner clock auto-detected as UTC{_off:+g} h ({_frac:.0%} of 3D files matched a scan)")
+    inv = pe_data.with_offset(inv, _off)
     opts = pe_viz.plant_options(inv, uni)
     r0 = opts.sort_values("dates").iloc[-1]
-    series = pe_viz.plant_series(inv, int(r0["block"]), int(r0["position"]))
+    series = pe_viz.plant_series(inv, int(r0["block"]), int(r0["position"]), int(r0["row"]))
     print(f"plant {r0['label']}: {len(series)} date(s)")
     pts = series[-1][1]
     bad = [k for k in pe_viz.INDICES if k != "rgb" and not np.isfinite(pe_viz.index_values(pts, k)).any()]

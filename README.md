@@ -14,9 +14,12 @@ imputes or silently merges.
 ## What it does
 Five tabs, kept deliberately simple:
 - **Data** — combine several TraitFinder exports (`.csv`/`.zip`) into one experiment, resolve
-  **duplicate scans** (you pick the keeper; nothing is auto-removed) and **remove blank pots**.
-- **Time-series** — trait trajectories on a true elapsed-days axis (no imputation), grouped by any
-  label, with a one-click **animated chart**.
+  **duplicate scans** (you confirm the keeper for every carrier scanned twice in a day — the combined
+  CSV can't be downloaded until you have) and **remove blank pots**.
+- **Time-series** — trait trajectories on a true elapsed-days axis (no imputation), grouped and
+  filtered by any label or factor you defined, individual scans in their group's colour, suggested
+  outliers off / highlighted / excluded, and **publication-quality export** (PNG/PDF/SVG at a set size
+  in cm, aspect ratio, text size and DPI) plus a one-click **animated chart**.
 - **3D viewer** — view any PlantEye `.ply` scan from above and the side in **true colour or 20
   colour indices** (NDVI, NDVI-940, NIR, PSRI, NPCI, GLI, ExG, ExR, ExG−ExR, NGRDI, VARI, MGRVI,
   RGBVI, TGI, CIVE, hue, lightness, saturation, height). Animate it:
@@ -24,8 +27,30 @@ Five tabs, kept deliberately simple:
   **several plants side by side** in sync. One colour scale per animation; GIFs need no extra software.
 - **Export** — the cleaned dataset, a copy of just the `.ply` files that match it (duplicates and
   blank pots left out, with the reason for each), every animation, and a log of every decision.
-- **Advanced** — optional factors, quality and missing-data checks, outlier curation, design
+- **Advanced** — optional factors (added to the exported CSV), **remove bad scans** (by date, carrier
+  and/or plant — logged and restorable), quality and missing-data checks, outlier curation, design
   workbook and manual-measurement validation.
+
+## Organise your experiment folder
+Several exports of one experiment (e.g. split by pot height) are combined into one dataset. Put each
+export in **its own sub-folder named after it**, inside one experiment folder, and enter the
+experiment folder in the app:
+
+```
+MyExperiment/                         ← enter THIS folder in the app
+├── Group2/                           ← one sub-folder per export, named after it
+│   ├── PHENO-0023_Group2_PlantEye.csv    (or the .zip from the portal)
+│   └── 3D/                           ← optional: that export's .ply files
+├── Group3/
+│   └── PHENO-0023_Group3_PlantEye.csv
+└── Group4/ …
+```
+
+The sub-folder names label each export in the app and in the `source_instance` column of the CSV.
+3D files may be the *processed* whole-carrier files (`<barcode>_<time>_full.ply`) or the per-plant
+*unit* files (`<barcode>_<time>_unitfile_<column>_<row>.ply`). Plants are identified by their full
+`barcode:column:row`, so carriers with two rows of pots (e.g. 4 × 2 = 8 plants) work. The scanner's
+time zone is detected automatically when matching 3D files to scans.
 
 ## Install (no coding required)
 Download the latest build for your OS from the **[Releases](../../releases)** page:

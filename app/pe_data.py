@@ -40,13 +40,15 @@ __all__ = [
     "suggest_split", "split_compound",
     "Instance", "discover_instances", "instance_summary",
     "detect_supersession", "union_instances", "overlapping_records",
-    "scan_key", "carrier_rescans", "resolve_union", "discover_ply", "ply_status", "copy_kept_ply",
+    "scan_key", "carrier_rescans", "resolve_union", "rescan_choices", "unresolved_rescans",
+    "failed_pots", "size_column", "discover_ply", "skipped_ply", "with_offset", "detect_utc_offset",
+    "plant_label", "ply_status", "copy_kept_ply", "PLY_NAME_HELP",
     "load_groundtruth", "join_groundtruth", "manual_measures",
 ]
 
 # Columns that identify a scan rather than describe a treatment or a measurement.
 ID_LIKE = {
-    "unit", "timestamp", "Week", "sensor", "g_alias", "block", "position", "plant",
+    "unit", "timestamp", "Week", "sensor", "g_alias", "block", "position", "row", "plant",
     "date", "is_blank", "source_instance",
 }
 _BLANK_TOKENS = {"", "blank", "empty", "nan", "none", "-", "na", "n/a"}
@@ -184,13 +186,55 @@ class Instance:
         return set(zip(self.df["block"], self.df["date"]))
 
 
+def _clean_stem(p: Path) -> str:
+    return p.stem.replace("_PlantEye", "").replace("Tabular-data_", "")
+
+
 def _instance_name(p: Path, root: Path) -> str:
-    """A short, stable name for an export: its export folder, else the file stem."""
-    stem = p.stem.replace("_PlantEye", "").replace("Tabular-data_", "")
-    for parent in (p.parent, p.parent.parent):
-        if parent != root and parent.name and "tabular" not in parent.name.lower():
-            return parent.name
-    return stem
+    """A short name for one export: the sub-folder of the experiment folder it sits in (the
+    recommended layout — one named sub-folder per export), else the file name. Names are made
+    unique across the experiment afterwards by :func:`_unique_names`."""
+    try:
+        rel = p.relative_to(root)
+    except ValueError:
+        rel = Path(p.name)
+    if len(rel.parts) > 1:
+        return rel.parts[0].replace("Tabular-data_", "") or rel.parts[0]
+    return _clean_stem(p)
+
+
+def _unique_names(insts: list, root: Path) -> None:
+    """Guarantee every export a distinct name. Two exports sharing a name used to crash the app
+    and made 'exclude this export' exclude both. Falls back to sub-folder/file name, then the
+    full relative path, then a numeric suffix."""
+    def rel(p):
+        try:
+            return p.relative_to(root)
+        except ValueError:
+            return Path(p.name)
+
+    def dupes(names):
+        seen, out = set(), set()
+        for n in names:
+            (out if n in seen else seen).add(n)
+        return out
+
+    clash = dupes([i.name for i in insts])
+    for i in insts:
+        if i.name in clash:
+            r = rel(i.path)
+            i.name = f"{r.parts[0]}/{_clean_stem(i.path)}" if len(r.parts) > 1 else _clean_stem(i.path)
+    clash = dupes([i.name for i in insts])
+    for i in insts:
+        if i.name in clash:
+            i.name = rel(i.path).with_suffix("").as_posix()
+    seen: dict = {}
+    for i in insts:
+        if i.name in seen:
+            seen[i.name] += 1
+            i.name = f"{i.name} ({seen[i.name]})"
+        else:
+            seen[i.name] = 1
 
 
 def _signature(df: pd.DataFrame):
@@ -233,6 +277,7 @@ def discover_instances(folder: str | Path) -> list[Instance]:
         order.append(ins)
 
     order.sort(key=lambda i: min(i.dates) if i.dates else pd.Timestamp.max)
+    _unique_names(order, folder)
     _mark_supersession(order)
     return order
 
@@ -329,27 +374,9 @@ def overlapping_records(insts: list[Instance]) -> pd.DataFrame:
 
 
 def union_instances(insts: list[Instance], drop: tuple = ()) -> pd.DataFrame:
-    """Union kept exports across time; where the same (unit, date) appears twice, keep the row
-    from the export that scanned the most units that day (the fuller scan). Stale re-exports
-    and anything in ``drop`` are excluded. Adds ``source_instance`` for provenance."""
-    frames = []
-    for ins in insts:
-        if ins.is_stale or ins.name in drop:
-            continue
-        d = ins.df.copy()
-        d["source_instance"] = ins.name
-        frames.append(d)
-    if not frames:
-        return pd.DataFrame()
-    alld = pd.concat(frames, ignore_index=True)
-    day_scale = alld.groupby(["source_instance", "date"])["unit"].transform("size")
-    alld = alld.assign(_scale=day_scale)
-    alld = (alld.sort_values("_scale", ascending=False)
-                .drop_duplicates(["unit", "date"], keep="first")
-                .drop(columns="_scale")
-                .sort_values(["date", "block", "position"])
-                .reset_index(drop=True))
-    return alld
+    """Union kept exports across time with the automatic choice on every (unit, date) collision
+    (see :func:`resolve_union`). Stale re-exports and anything in ``drop`` are excluded."""
+    return resolve_union(insts, decisions=None, drop=drop)
 
 
 # ----------------------------------------------------------------- curation / resolve
@@ -429,16 +456,71 @@ def resolve_union(insts: list[Instance], decisions: dict | None = None,
         t = alld["treatment"] if "treatment" in alld else pd.Series("", index=alld.index)
         alld["is_blank"] = is_blank_series(g) | is_blank_series(t)
 
-    # resolve (unit, date) collisions: user 'keep' preference wins, else fuller-day default
+    # resolve (unit, date) collisions: the user's 'keep' wins; otherwise the suggested scan —
+    # fewest failed (zero/missing) plant pots, then the fuller export that day, then the LATER
+    # scan (an operator usually rescans because the first pass failed).
     prefer = {k for k, v in decisions.items() if v.get("action") == "keep"}
     alld["_pref"] = alld["scan_key"].isin(prefer).astype(int)
+    alld["_bad"] = failed_pots(alld)
     alld["_scale"] = alld.groupby(["source_instance", "date"])["unit"].transform("size")
-    alld = (alld.sort_values(["_pref", "_scale"], ascending=False)
+    alld = (alld.sort_values(["_pref", "_bad", "_scale", "timestamp"],
+                             ascending=[False, True, False, False], kind="stable")
                 .drop_duplicates(["unit", "date"], keep="first")
-                .drop(columns=["_pref", "_scale", "scan_key"])
-                .sort_values(["date", "block", "position"])
+                .drop(columns=["_pref", "_bad", "_scale", "scan_key"])
+                .sort_values(["date", "block", "position", "row"])
                 .reset_index(drop=True))
     return alld
+
+
+def size_column(df: pd.DataFrame) -> str | None:
+    """The trait that best says 'was a plant seen?' (Digital Biomass, else a leaf-area trait)."""
+    for key in ("digital biomass", "leaf area"):
+        for c in df.columns:
+            if key in c.lower() and pd.api.types.is_numeric_dtype(df[c]):
+                return c
+    return None
+
+
+def failed_pots(df: pd.DataFrame) -> pd.Series:
+    """For each row, how many *plant* (non-blank) pots in the same physical carrier scan
+    (export, carrier, timestamp) read zero or missing — a failed or empty scan."""
+    col = size_column(df)
+    if col is None or df.empty:
+        return pd.Series(0, index=df.index)
+    v = pd.to_numeric(df[col], errors="coerce")
+    bad = ((v.isna() | (v <= 0)) & ~df["is_blank"].astype(bool)).astype(int)
+    keys = [df[c] for c in ("source_instance", "block", "timestamp") if c in df.columns]
+    return bad.groupby(keys).transform("sum")
+
+
+def rescan_choices(cand: pd.DataFrame, block: int, date) -> pd.DataFrame:
+    """The competing scans of one carrier on one day, one row each, with the suggested keeper
+    first: timestamp, export, pots, failed pots, and ``suggested`` (True for exactly one)."""
+    sub = cand[(cand["block"] == block) & (cand["date"] == pd.Timestamp(date))].copy()
+    if sub.empty:
+        return pd.DataFrame(columns=["timestamp", "source_instance", "pots", "failed", "suggested"])
+    sub["_bad"] = failed_pots(sub)
+    g = (sub.groupby(["timestamp", "source_instance"])
+            .agg(pots=("unit", "nunique"), failed=("_bad", "max")).reset_index())
+    g = g.sort_values(["failed", "pots", "timestamp"], ascending=[True, False, False], kind="stable")
+    g["suggested"] = [True] + [False] * (len(g) - 1)
+    return g.sort_values("timestamp").reset_index(drop=True)
+
+
+def unresolved_rescans(cand: pd.DataFrame, decisions: dict) -> pd.DataFrame:
+    """Carrier-days scanned more than once where the user has **not yet chosen** which scan(s) to
+    keep. A carrier-day is resolved once every one of its scan rows has a keep/drop decision."""
+    cr = carrier_rescans(cand)
+    if not len(cr):
+        return cr
+    decided = {k for k, v in decisions.items() if v.get("action") in ("keep", "drop")}
+    left = []
+    for _, r in cr.iterrows():
+        sub = cand[(cand["block"] == r["block"]) & (cand["date"] == pd.Timestamp(r["date"]))]
+        src = sub["source_instance"] if "source_instance" in sub else [""] * len(sub)
+        keys = {scan_key(si, u, t) for si, u, t in zip(src, sub["unit"], sub["timestamp"])}
+        left.append(not keys <= decided)
+    return cr[left].reset_index(drop=True)
 
 
 # --------------------------------------------------------------------- PLY discovery
@@ -446,24 +528,30 @@ def resolve_union(insts: list[Instance], decisions: dict | None = None,
 _PLY_FULL = re.compile(r"^(\d+)_(\d{8}T\d{6})_full\.ply$", re.I)
 _PLY_UNIT = re.compile(r"^(\d+)_(\d{8}T\d{6})_unitfile_(\d+)_(\d+)\.ply$", re.I)
 
+PLY_NAME_HELP = ("PhenoCleaning reads both kinds of PlantEye 3D file: **processed** whole-carrier "
+                 "files named `<barcode>_<time>_full.ply`, and per-plant **unit** files named "
+                 "`<barcode>_<time>_unitfile_<column>_<row>.ply`. Either kind works; if both exist "
+                 "for the same scan, the whole-carrier file is used. Files with other names are "
+                 "skipped and listed below.")
 
-def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
+
+def discover_ply(folder: str | Path, offset_hours: float = 0) -> pd.DataFrame:
     """Recursively find every `.ply` for an experiment and dedup to one record per scan. Handles
-    `<block>_<UTC>_full.ply` (whole carrier) and `<block>_<UTC>_unitfile_N_M.ply` (one plant, N =
-    carrier position). Where a `_full` file exists for a (block, UTC) its per-plant files are
-    redundant; otherwise every plant's unitfile is kept. Genuine retakes (same block, different
-    UTC) are kept. Returns path, block, utc, local time, kind, unit_n (position, unitfiles only),
-    size."""
+    `<block>_<UTC>_full.ply` (whole carrier) and `<block>_<UTC>_unitfile_N_M.ply` (one plant,
+    N = carrier column, M = row). Where a `_full` file exists for a (block, UTC) its per-plant files
+    are redundant; otherwise every plant's unitfile is kept. Genuine retakes (same block, different
+    UTC) are kept. Returns path, block, utc, local time (UTC + ``offset_hours``; see
+    :func:`detect_utc_offset`), kind, unit_n (column) and unit_row (row) for unitfiles, size."""
     folder = Path(folder)
     recs = []
     for p in folder.rglob("*.ply"):
         m = _PLY_FULL.match(p.name)
-        kind, unit_n = "full", None
+        kind, unit_n, unit_row = "full", None, None
         if not m:
             m = _PLY_UNIT.match(p.name)
             kind = "unitfile"
             if m:
-                unit_n = int(m.group(3))
+                unit_n, unit_row = int(m.group(3)), int(m.group(4))
         if not m:
             continue
         utc = pd.to_datetime(m.group(2), format="%Y%m%dT%H%M%S")
@@ -472,8 +560,8 @@ def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
         except OSError:
             mb = float("nan")
         recs.append({"path": p, "block": int(m.group(1)), "utc": utc, "kind": kind, "unit_n": unit_n,
-                     "local": utc + pd.Timedelta(hours=offset_hours), "mb": mb})
-    cols = ["path", "block", "utc", "kind", "unit_n", "local", "mb"]
+                     "unit_row": unit_row, "local": utc + pd.Timedelta(hours=offset_hours), "mb": mb})
+    cols = ["path", "block", "utc", "kind", "unit_n", "unit_row", "local", "mb"]
     if not recs:
         return pd.DataFrame(columns=cols)
     inv = pd.DataFrame(recs)
@@ -481,33 +569,88 @@ def discover_ply(folder: str | Path, offset_hours: int = 8) -> pd.DataFrame:
     redundant = (inv["kind"] == "unitfile") & np.array(
         [k in full_keys for k in zip(inv["block"], inv["utc"])], dtype=bool)
     inv = (inv[~redundant]
-           .drop_duplicates(["block", "utc", "kind", "unit_n"])
-           .sort_values(["local", "block", "unit_n"], na_position="first")
+           .drop_duplicates(["block", "utc", "kind", "unit_n", "unit_row"])
+           .sort_values(["local", "block", "unit_n", "unit_row"], na_position="first")
            .reset_index(drop=True))
     return inv[cols]
+
+
+def skipped_ply(folder: str | Path) -> list[str]:
+    """`.ply` files under ``folder`` whose names PhenoCleaning does not recognise (so they are not
+    shown) — reported to the user instead of being ignored silently."""
+    return sorted(p.name for p in Path(folder).rglob("*.ply")
+                  if not (_PLY_FULL.match(p.name) or _PLY_UNIT.match(p.name)))
+
+
+def with_offset(inventory: pd.DataFrame, offset_hours: float) -> pd.DataFrame:
+    """The inventory with ``local`` recomputed as UTC + ``offset_hours``."""
+    inv = inventory.copy()
+    if len(inv):
+        inv["local"] = pd.to_datetime(inv["utc"]) + pd.Timedelta(hours=float(offset_hours))
+    return inv
+
+
+def detect_utc_offset(inventory: pd.DataFrame, candidates: pd.DataFrame,
+                      tol_minutes: float = 1.0) -> tuple[float, float]:
+    """3D file names carry UTC time; the tabular export carries the scanner's local time. Find the
+    whole/half-hour offset (-12 to +14 h) that lines the most 3D files up with a scan of the same
+    carrier, so the app works in any time zone (and across daylight saving). Returns
+    ``(offset_hours, fraction_of_files_matched)``; (0, 0) if nothing can be matched."""
+    if inventory is None or not len(inventory) or candidates is None or not len(candidates):
+        return 0.0, 0.0
+    tol = np.timedelta64(int(tol_minutes * 60), "s")
+    ts = {int(b): np.sort(pd.to_datetime(g["timestamp"]).dropna().to_numpy(dtype="datetime64[s]"))
+          for b, g in candidates.groupby("block")}
+    files = inventory.drop_duplicates(["block", "utc"])
+    utcs = pd.to_datetime(files["utc"]).to_numpy(dtype="datetime64[s]")
+    blocks = files["block"].astype(int).to_numpy()
+    best, best_n = 0.0, 0
+    for off in np.arange(-12, 14.5, 0.5):
+        shift = np.timedelta64(int(off * 3600), "s")
+        n = 0
+        for b, u in zip(blocks, utcs):
+            arr = ts.get(int(b))
+            if arr is None or not len(arr):
+                continue
+            t = u + shift
+            i = int(np.searchsorted(arr, t))
+            if any(0 <= j < len(arr) and abs(arr[j] - t) <= tol for j in (i - 1, i)):
+                n += 1
+        if n > best_n:
+            best, best_n = float(off), n
+    return best, best_n / max(len(files), 1)
+
+
+def plant_label(block, position, row=1) -> str:
+    """The full plant ID shown everywhere: ``barcode:column:row``."""
+    return f"{int(block)}:{int(position)}:{int(row)}"
 
 
 def ply_status(inventory: pd.DataFrame, kept: pd.DataFrame, candidates: pd.DataFrame,
                tol_minutes: float = 1.0) -> pd.DataFrame:
     """Match every plant in every `.ply` to the tabular data and say whether it survives the
-    cleaning. One row per (file, carrier position) with ``status``:
+    cleaning. One row per (file, plant = column + row) with ``status``:
 
     - ``kept`` — the scan is in the cleaned dataset;
     - ``excluded`` — the exports have this scan but it was removed (``reason``: blank pot,
       duplicate scan, or dropped by you);
     - ``not in exports`` — no tabular row at all (nothing was decided about it).
 
-    A `.ply` matches a row on carrier + position + time (the file's UTC time + the offset already
-    in ``local``) within ``tol_minutes``."""
-    cols = ["path", "kind", "block", "position", "local", "status", "reason"]
+    A `.ply` matches a row on carrier + column + row + time (the file's UTC time + the offset
+    already in ``local``) within ``tol_minutes``."""
+    cols = ["path", "kind", "block", "position", "row", "local", "status", "reason"]
     if inventory is None or not len(inventory):
         return pd.DataFrame(columns=cols)
     tol = pd.Timedelta(minutes=tol_minutes)
+    empty = pd.DataFrame({"position": pd.Series(dtype=int), "row": pd.Series(dtype=int),
+                          "timestamp": pd.Series(dtype="datetime64[ns]"),
+                          "is_blank": pd.Series(dtype=bool)})
 
     def by_block(df):
         if df is None or not len(df):
             return {}
         d = df[["block", "position", "timestamp", "is_blank"]].copy()
+        d["row"] = df["row"] if "row" in df else 1
         d["timestamp"] = pd.to_datetime(d["timestamp"])
         return {b: g for b, g in d.groupby("block")}
 
@@ -515,29 +658,31 @@ def ply_status(inventory: pd.DataFrame, kept: pd.DataFrame, candidates: pd.DataF
     recs = []
     for _, r in inventory.iterrows():
         b, t = int(r["block"]), pd.Timestamp(r["local"])
-        cand = C.get(b, pd.DataFrame(columns=["position", "timestamp", "is_blank"]))
-        cand = cand[(cand["timestamp"] - t).abs() <= tol]
-        keep = K.get(b, pd.DataFrame(columns=["position", "timestamp", "is_blank"]))
+        allc = C.get(b, empty)
+        cand = allc[(allc["timestamp"] - t).abs() <= tol]
+        keep = K.get(b, empty)
         if r["kind"] == "unitfile":
-            positions = [int(r["unit_n"])]
+            plants = [(int(r["unit_n"]), int(r["unit_row"]) if pd.notna(r.get("unit_row")) else 1)]
         else:
-            positions = sorted(cand["position"].unique().tolist()) or [1, 2, 3, 4]
-        for p in positions:
-            here = cand[cand["position"] == p]
-            k = keep[(keep["position"] == p) & ((keep["timestamp"] - t).abs() <= tol)]
+            src = cand if len(cand) else allc
+            plants = (sorted(set(zip(src["position"].astype(int), src["row"].astype(int))))
+                      or [(p, 1) for p in (1, 2, 3, 4)])
+        for p, rw in plants:
+            here = cand[(cand["position"] == p) & (cand["row"] == rw)]
+            mine = keep[(keep["position"] == p) & (keep["row"] == rw)]
+            k = mine[(mine["timestamp"] - t).abs() <= tol]
             if len(k):
                 status, reason = "kept", ""
             elif not len(here):
                 status, reason = "not in exports", "no matching row in the tabular exports"
             elif here["is_blank"].any():
                 status, reason = "excluded", "blank pot"
-            elif len(keep[(keep["position"] == p)
-                          & (keep["timestamp"].dt.normalize() == t.normalize())]):
+            elif len(mine[mine["timestamp"].dt.normalize() == t.normalize()]):
                 status, reason = "excluded", "duplicate scan — another scan that day was kept"
             else:
                 status, reason = "excluded", "dropped"
             recs.append({"path": r["path"], "kind": r["kind"], "block": b, "position": int(p),
-                         "local": r["local"], "status": status, "reason": reason})
+                         "row": int(rw), "local": r["local"], "status": status, "reason": reason})
     return pd.DataFrame(recs, columns=cols)
 
 
@@ -556,10 +701,11 @@ def copy_kept_ply(status: pd.DataFrame, out_dir: str | Path, progress=None) -> p
         other = g[g["status"] != "kept"]
         if len(kept):
             shutil.copy2(path, out / Path(path).name)
-            note = "; ".join(f"position {p}: {s}{' (' + w + ')' if w else ''}"
-                             for p, s, w in zip(other["position"], other["status"], other["reason"]))
+            note = "; ".join(f"plant {p}:{rw}: {s}{' (' + w + ')' if w else ''}"
+                             for p, rw, s, w in zip(other["position"], other["row"], other["status"],
+                                                    other["reason"]))
             rows.append({"file": Path(path).name, "copied": True,
-                         "kept plants": ", ".join(map(str, kept["position"])),
+                         "kept plants": ", ".join(f"{p}:{rw}" for p, rw in zip(kept["position"], kept["row"])),
                          "note": ("also contains — " + note) if note else ""})
         else:
             reasons = "; ".join(sorted(set(other["reason"])))

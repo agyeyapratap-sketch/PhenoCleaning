@@ -227,11 +227,16 @@ def read_tabular(path_or_zip: str | Path) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
     df["timestamp"] = _parse_timestamps(df["timestamp"])
 
-    # unit is "<block>:<position>:<subsample>", zero-padded in some copies.
+    # unit is "<block>:<column>:<row>", zero-padded in some copies. Carriers with one row of pots
+    # always have row 1; a 2-row carrier (e.g. 4 columns x 2 rows = 8 plants) has rows 1 and 2, so
+    # the row is part of the plant's identity and must never be dropped.
     parts = df["unit"].astype(str).str.split(":", expand=True)
     df["block"] = parts[0].astype(int)
     df["position"] = parts[1].astype(int)
-    df["plant"] = df["block"].astype(str) + ":" + df["position"].astype(str).str.zfill(2)
+    row = pd.to_numeric(parts[2], errors="coerce") if parts.shape[1] > 2 else None
+    df["row"] = row.fillna(1).astype(int) if row is not None else 1
+    df["plant"] = (df["block"].astype(str) + ":" + df["position"].astype(str) + ":"
+                   + df["row"].astype(str))
     df["date"] = df["timestamp"].dt.normalize()
     df.attrs["source"] = source
     return df
@@ -241,7 +246,7 @@ def trait_columns(df: pd.DataFrame) -> list[str]:
     """Numeric PlantEye traits, excluding the identifier/derived columns we add."""
     meta = {
         "unit", "timestamp", "Week", "sensor", "genotype", "g_alias", "treatment",
-        "block", "position", "plant", "date",
+        "block", "position", "row", "plant", "date",
     }
     return [c for c in df.columns if c not in meta and pd.api.types.is_numeric_dtype(df[c])]
 

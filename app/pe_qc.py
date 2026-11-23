@@ -21,7 +21,7 @@ import pe_data  # noqa: E402  (for carrier_rescans; no circular import — pe_da
 SEV_ORDER = {"blocker": 0, "flag": 1, "warn": 2, "info": 3, "ok": 4}
 
 _META = {"unit", "timestamp", "Week", "sensor", "genotype", "g_alias", "treatment",
-         "block", "position", "plant", "date", "is_blank", "source_instance", "scan_key"}
+         "block", "position", "row", "plant", "date", "is_blank", "source_instance", "scan_key"}
 
 
 @dataclass
@@ -44,6 +44,7 @@ def run_all(df: pd.DataFrame, gt_join: pd.DataFrame | None = None,
     findings += check_repeat_scans(df)
     # carrier rescans are best seen on the pre-dedup candidate rows, if supplied
     findings += check_carrier_rescans(candidates if candidates is not None else df)
+    findings += check_sparse_dates(df)
     findings += check_blanks_with_data(df)
     # advanced checks (rewritten, tucked away)
     findings += check_time_of_day(df)
@@ -172,10 +173,40 @@ def check_carrier_rescans(df) -> list[Finding]:
                         explain=("**What:** the same carrier/barcode has two or more scan times on one "
                                  "date.  \n**Why it matters:** it usually means a rescan (jam, re-run, or a "
                                  "test pass) — you probably want only one of them in the analysis.  \n"
-                                 "**What to do:** open the **Curate / resolve** tab to pick which scan to "
-                                 "keep for that carrier and day."))]
+                                 "**What to do:** pick which scan to keep (or drop them all) under **Data → "
+                                 "Duplicate scans**. The combined CSV can't be downloaded until every one is "
+                                 "chosen."))]
     return [Finding("carrier scanned twice in a day", "ok",
                     "Each carrier was scanned at most once per day.")]
+
+
+def check_sparse_dates(df, frac: float = 0.25) -> list[Finding]:
+    """A scan date on which only a few carriers were scanned (fewer than ``frac`` of the usual
+    number) — typically a one-off or rogue scan rather than a real timepoint. It adds a date to every
+    plot and the elapsed-days axis for a handful of plants."""
+    if "date" not in df or "block" not in df or df.empty:
+        return []
+    per = df.groupby("date")["block"].nunique()
+    if len(per) < 3:
+        return []
+    usual = float(per.median())
+    sparse = per[per < frac * usual]
+    exp = ("**What:** on these dates only a few carriers were scanned, far fewer than on a normal "
+           "scan day.  \n**Why it matters:** a one-off scan (a test, a rescan of one carrier, a scan of "
+           "the wrong plants) adds an extra date to every plot and can distort the means for that day.  \n"
+           "**What to do:** if it is not a real timepoint, remove it in **Advanced → Remove scans** "
+           "(choose the date, and the carrier if needed).")
+    if len(sparse):
+        tab = pd.DataFrame({"date": [pd.Timestamp(d).strftime("%Y-%m-%d") for d in sparse.index],
+                            "carriers_scanned": sparse.values.astype(int),
+                            "usual_carriers": int(round(usual)),
+                            "carriers": [", ".join(map(str, sorted(df.loc[df["date"] == d, "block"].unique())))
+                                         for d in sparse.index]})
+        return [Finding("date with very few carriers", "flag",
+                        f"{len(sparse)} date(s) scanned only a few carriers (usual {usual:.0f}): "
+                        + ", ".join(tab["date"]) + ".", tab, explain=exp)]
+    return [Finding("date with very few carriers", "ok",
+                    "Every scan date covers a normal number of carriers.", explain=exp, advanced=True)]
 
 
 # --------------------------------------------------------------------------- integrity
@@ -309,7 +340,7 @@ def anomalous_scans(df: pd.DataFrame, measure: str, include_zero: bool = True) -
         return pd.DataFrame()
     bad["value"] = s[mask]
     bad["status"] = np.where(bad["value"].isna(), "missing", "zero")
-    cols = ["block", "position", "unit", "date", "timestamp", "status", "value", "source_instance"]
+    cols = ["block", "position", "row", "unit", "date", "timestamp", "status", "value", "source_instance"]
     out = bad[[c for c in cols if c in bad.columns]].copy()
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
     if "timestamp" in out:
@@ -349,6 +380,7 @@ def timeseries_outliers(df: pd.DataFrame, trait: str, k: float = 3.5,
                 r = g.iloc[i]
                 rows.append({
                     "unit": unit, "block": r["block"], "position": r["position"],
+                    "row": r.get("row", 1),
                     "date": pd.Timestamp(r["date"]).strftime("%Y-%m-%d"),
                     "timestamp": pd.Timestamp(r["timestamp"]).strftime("%Y-%m-%d %H:%M:%S"),
                     "value": round(float(y[i]), 2),
@@ -362,8 +394,4 @@ def timeseries_outliers(df: pd.DataFrame, trait: str, k: float = 3.5,
 # --------------------------------------------------------------------------- helpers
 
 def _size_col(df):
-    for c in df.columns:
-        cl = c.lower()
-        if ("digital biomass" in cl or "leaf area" in cl) and pd.api.types.is_numeric_dtype(df[c]):
-            return c
-    return None
+    return pe_data.size_column(df)
