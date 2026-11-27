@@ -49,7 +49,7 @@ __all__ = [
 # Columns that identify a scan rather than describe a treatment or a measurement.
 ID_LIKE = {
     "unit", "timestamp", "Week", "sensor", "g_alias", "block", "position", "row", "plant",
-    "date", "is_blank", "source_instance",
+    "date", "is_blank", "source_instance", "scan_of_day",
 }
 _BLANK_TOKENS = {"", "blank", "empty", "nan", "none", "-", "na", "n/a"}
 
@@ -422,6 +422,7 @@ def resolve_union(insts: list[Instance], decisions: dict | None = None,
     - ``drop``    — remove that scan entirely.
     - ``relabel`` — overwrite ``field`` (default ``treatment``) with ``new_label`` for that scan.
     - ``keep``    — on a (unit, date) collision, prefer that scan over the automatic default.
+      If several scans of one (unit, date) are kept, all of them stay (``scan_of_day`` 1, 2 …).
 
     With no decision for a collision, the automatic default is the fuller-scan-of-the-day rule
     (identical to ``union_instances``), so the app *suggests* and the user *overrides*.
@@ -463,12 +464,17 @@ def resolve_union(insts: list[Instance], decisions: dict | None = None,
     alld["_pref"] = alld["scan_key"].isin(prefer).astype(int)
     alld["_bad"] = failed_pots(alld)
     alld["_scale"] = alld.groupby(["source_instance", "date"])["unit"].transform("size")
-    alld = (alld.sort_values(["_pref", "_bad", "_scale", "timestamp"],
-                             ascending=[False, True, False, False], kind="stable")
-                .drop_duplicates(["unit", "date"], keep="first")
+    # Every scan the user explicitly kept survives, so choosing two scans of a carrier-day keeps
+    # both (numbered 1, 2 … by time in ``scan_of_day``); without a choice, one scan per plant-day.
+    alld = alld.sort_values(["_pref", "_bad", "_scale", "timestamp"],
+                            ascending=[False, True, False, False], kind="stable")
+    first = ~alld.duplicated(["unit", "date"], keep="first")
+    alld = (alld[first | (alld["_pref"] == 1)]
                 .drop(columns=["_pref", "_bad", "_scale", "scan_key"])
-                .sort_values(["date", "block", "position", "row"])
+                .sort_values(["date", "block", "position", "row", "timestamp"])
                 .reset_index(drop=True))
+    if alld.duplicated(["unit", "date"]).any():
+        alld["scan_of_day"] = alld.groupby(["unit", "date"]).cumcount() + 1
     return alld
 
 

@@ -296,7 +296,7 @@ def rows_on_carrier(block: int) -> int:
 
 
 def rescan_resolver(prefix: str, only_unresolved: bool = False) -> int:
-    """One choice per carrier scanned more than once on a day: keep one scan, or drop them all.
+    """One choice per carrier scanned more than once on a day: keep one scan, several, or none.
     The suggested scan (fewest pots reading zero, then the later scan) is pre-selected, but nothing
     counts as chosen until the user confirms it. Returns the number still unconfirmed."""
     cand = SS.candidates if SS.candidates is not None else candidates_frame()
@@ -309,42 +309,46 @@ def rescan_resolver(prefix: str, only_unresolved: bool = False) -> int:
         block, date = int(row["block"]), row["date"]
         sub = cand[(cand["block"] == block) & (cand["date"] == pd.Timestamp(date))]
         ch = pe_data.rescan_choices(cand, block, date)
-        opts, suggested = {}, 0
-        for i, c in ch.iterrows():
+        opts, suggested = {}, []
+        for _, c in ch.iterrows():
             lab = (f"{pd.Timestamp(c['timestamp']):%H:%M:%S} — {c['pots']} pots"
                    + (f", {c['failed']} read 0" if c["failed"] else "")
                    + (f" [{c['source_instance']}]" if multi_src else "")
                    + ("  ✓ suggested" if c["suggested"] else ""))
-            opts[lab] = (pd.Timestamp(c["timestamp"]), c["source_instance"])
+            opts[lab] = (pd.Timestamp(c["timestamp"]), str(c["source_instance"]))
             if c["suggested"]:
-                suggested = i
-        drop_all = "Drop all — none of these scans is good"
-        opts[drop_all] = None
+                suggested = [lab]
         resolved = (block, date) not in open_keys
-        index = suggested
+        default = suggested
         if resolved:
-            kept = [k for k, v in SS.decisions.items()
-                    if v.get("action") == "keep" and k in {row_scan_key(r) for _, r in sub.iterrows()}]
-            if not kept:
-                index = len(opts) - 1
-            else:
-                for j, v in enumerate(opts.values()):
-                    if v is not None and (str(v[1]), v[0].isoformat()) == (kept[0][0], kept[0][2]):
-                        index = j
+            sub_keys = {row_scan_key(r) for _, r in sub.iterrows()}
+            kept = {(k[0], k[2]) for k, v in SS.decisions.items()
+                    if v.get("action") == "keep" and k in sub_keys}
+            default = [lab for lab, (ts, src) in opts.items() if (src, ts.isoformat()) in kept]
         cc = st.columns([5, 1])
-        choice = cc[0].radio(f"{'✅' if resolved else '⚠️'} Carrier **{block}** scanned {len(ch)}× on "
-                             f"**{date}** — keep:", list(opts), index=index,
-                             key=f"{prefix}cr_{block}_{date}", horizontal=True)
+        chosen = cc[0].pills(f"{'✅' if resolved else '⚠️'} Carrier **{block}** scanned {len(ch)}× on "
+                             f"**{date}** — keep (pick one or more):", list(opts),
+                             selection_mode="multi", default=default,
+                             key=f"{prefix}cr_{block}_{date}",
+                             help="Pick the good scan. Pick more than one only if the scans really "
+                                  "differ and you want them all (each is kept as its own row, numbered "
+                                  "in the `scan_of_day` column; graphs average them per plant). Pick "
+                                  "none to drop all of them.")
+        if not chosen:
+            cc[0].caption("No scan picked: **all** of this carrier's scans that day will be dropped.")
+        elif len(chosen) > 1:
+            cc[0].caption(f"Keeping **{len(chosen)} scans**: each plant on this carrier gets "
+                          f"{len(chosen)} rows for {date} (`scan_of_day` 1, 2 …).")
         if cc[1].button("Update" if resolved else "Confirm", key=f"{prefix}crbtn_{block}_{date}",
                         type="secondary" if resolved else "primary"):
-            target = opts[choice]
+            targets = {opts[lab] for lab in chosen}
+            what = "; ".join(lab.replace("  ✓ suggested", "") for lab in chosen) or "drop all"
             for _, r in sub.iterrows():
-                keep = (target is not None and pd.Timestamp(r["timestamp"]) == target[0]
-                        and r["source_instance"] == target[1])
+                keep = (pd.Timestamp(r["timestamp"]), str(r["source_instance"])) in targets
                 set_decision(row_scan_key(r), "keep" if keep else "drop",
-                             note=f"carrier {block} {date}: {'keep' if keep else 'drop'} ({choice})")
+                             note=f"carrier {block} {date}: {'keep' if keep else 'drop'} ({what})")
             rebuild()
-            log(f"Carrier {block} {date}: {choice}")
+            log(f"Carrier {block} {date}: keep {what}")
             st.rerun()
     return len(open_keys)
 
@@ -535,7 +539,8 @@ with tabs[1], guard("the Time-series tab"):
         if omode != "Off":
             flagged = pe_qc.timeseries_outliers(clean_rows()[lambda x: ~x["is_blank"]], trait,
                                                 k=6.0 - 0.45 * sens)
-            in_plot = (flagged.merge(d[["unit", "date"]].assign(date=d["date"].dt.strftime("%Y-%m-%d")),
+            in_plot = (flagged.merge(d[["unit", "date"]].assign(date=d["date"].dt.strftime("%Y-%m-%d"))
+                                     .drop_duplicates(),
                                      on=["unit", "date"]) if len(flagged) else flagged)
             st.caption(f"{len(in_plot)} suggested outlier scan(s) among the plotted plants "
                        f"({'ringed in red' if omode == 'Highlight' else 'left out'}). Review or drop them "

@@ -14,7 +14,8 @@ imputes or silently merges.
 ## What it does
 Five tabs, kept deliberately simple:
 - **Data** — combine several TraitFinder exports (`.csv`/`.zip`) into one experiment, resolve
-  **duplicate scans** (you confirm the keeper for every carrier scanned twice in a day — the combined
+  **duplicate scans** (for every carrier scanned twice in a day you confirm which scan(s) to keep — one, several
+  (numbered in `scan_of_day`) or none; the combined
   CSV can't be downloaded until you have) and **remove blank pots**.
 - **Time-series** — trait trajectories on a true elapsed-days axis (no imputation), grouped and
   filtered by any label or factor you defined, individual scans in their group's colour, suggested

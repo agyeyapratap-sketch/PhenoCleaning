@@ -103,6 +103,19 @@ def run() -> int:
             assert len(u) == 12 + 24, f"combined rows {len(u)}"
             assert u.loc[u["block"] == 2, "unit"].nunique() == 8, "2-row carrier lost plants"
             assert len(pe_data.unresolved_rescans(cand, {})) == 1, "rescan not detected"
+            assert "scan_of_day" not in u, "scan_of_day added without a keep-both choice"
+            # keep BOTH scans of the rescanned carrier-day: 8 extra rows, numbered 1 and 2
+            day1 = cand[(cand["block"] == 2) & (cand["date"] == pd.Timestamp("2026-07-07"))]
+            both = {pe_data.scan_key(s, n, t): {"action": "keep"}
+                    for s, n, t in zip(day1["source_instance"], day1["unit"], day1["timestamp"])}
+            assert len(pe_data.unresolved_rescans(cand, both)) == 0, "keep-both not counted as resolved"
+            ub = pe_data.resolve_union(insts, both)
+            assert len(ub) == 12 + 24 + 8, f"keep-both rows {len(ub)}"
+            assert sorted(ub["scan_of_day"].unique()) == [1, 2], "scan_of_day not numbered"
+            assert "scan_of_day" not in pe_data.trait_columns(ub), "scan_of_day treated as a trait"
+            import pe_viz
+            _, summ = pe_viz.trait_figure(ub[ub["block"] == 2], "Plant Height Max mm")
+            assert summ["n"].max() == 8, "a double-scanned plant was counted twice in the mean"
 
     def ui():
         import streamlit  # noqa: F401

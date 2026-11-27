@@ -246,7 +246,7 @@ def trait_columns(df: pd.DataFrame) -> list[str]:
     """Numeric PlantEye traits, excluding the identifier/derived columns we add."""
     meta = {
         "unit", "timestamp", "Week", "sensor", "genotype", "g_alias", "treatment",
-        "block", "position", "row", "plant", "date",
+        "block", "position", "row", "plant", "date", "scan_of_day",
     }
     return [c for c in df.columns if c not in meta and pd.api.types.is_numeric_dtype(df[c])]
 

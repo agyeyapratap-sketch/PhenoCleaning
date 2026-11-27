@@ -105,7 +105,7 @@ If you'd rather not use CI for Windows:
 pyinstaller packaging\phenocleaning.spec --noconfirm --clean
 dist\PhenoCleaning\PhenoCleaning.exe --selftest      # must print SELFTEST OK
 # 2) compile the installer — the version must match app/version.py
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.2 packaging\installer.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.3 packaging\installer.iss
 # -> packaging\Output\PhenoCleaning-Setup.exe
 ```
 

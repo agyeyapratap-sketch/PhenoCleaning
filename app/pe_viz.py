@@ -596,7 +596,11 @@ def trait_figure(d: pd.DataFrame, trait: str, group: str | None = None, *,
     groups = sorted(d["_g"].unique(), key=lambda g: (g == "nan", g))
     colors = dict(zip(groups, group_colors(len(groups))))
 
-    stats = d.groupby(["_g", "elapsed"])[trait].agg(["mean", "std", "sem", "count"]).reset_index()
+    # one value per plant per day first: if a plant was scanned twice that day and both scans
+    # were kept, they are averaged so the plant isn't counted twice in the mean or the error bar
+    per_plant = (d.groupby(["_g", "elapsed", "unit"], as_index=False)[trait].mean()
+                 if "unit" in d else d)
+    stats = per_plant.groupby(["_g", "elapsed"])[trait].agg(["mean", "std", "sem", "count"]).reset_index()
     half = {"se": stats["sem"], "sd": stats["std"], "ci95": 1.96 * stats["sem"]}.get(error)
     stats["err"] = half.fillna(0) if half is not None else 0.0
 

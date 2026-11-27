@@ -21,7 +21,8 @@ import pe_data  # noqa: E402  (for carrier_rescans; no circular import — pe_da
 SEV_ORDER = {"blocker": 0, "flag": 1, "warn": 2, "info": 3, "ok": 4}
 
 _META = {"unit", "timestamp", "Week", "sensor", "genotype", "g_alias", "treatment",
-         "block", "position", "row", "plant", "date", "is_blank", "source_instance", "scan_key"}
+         "block", "position", "row", "plant", "date", "is_blank", "source_instance", "scan_key",
+         "scan_of_day"}
 
 
 @dataclass
