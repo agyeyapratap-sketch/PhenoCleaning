@@ -1,5 +1,7 @@
 # PyInstaller spec — PhenoCleaning standalone app (one-folder build).
-# Build from the PlantEyePipeline folder:  pyinstaller packaging/phenocleaning.spec --noconfirm
+# Build from the PlantEyePipeline folder — ALWAYS name this spec (a bare `pyinstaller app/...` regenerates
+# a spec and drops these settings):  pyinstaller packaging/phenocleaning.spec --noconfirm --clean
+# Then:  dist/PhenoCleaning/PhenoCleaning --selftest   (must print SELFTEST OK and exit 0)
 # Output: dist/PhenoCleaning/PhenoCleaning.exe  (ship the whole dist/PhenoCleaning folder, or an installer)
 import os
 from PyInstaller.utils.hooks import collect_all, copy_metadata
@@ -24,14 +26,23 @@ for meta in ("streamlit", "numpy", "pandas", "altair", "pyarrow", "packaging"):
     except Exception:
         pass
 
+# Stamp the build (version, date, git commit) so the app and its error reports show which build it is.
+import subprocess, sys
+subprocess.run([sys.executable, os.path.join(ROOT, "packaging", "write_build_info.py")], check=True)
+
 # The app's own source, bundled as data so Streamlit can run it (mirrors the source layout).
-for f in ("pe_app.py", "pe_data.py", "pe_qc.py", "pe_design.py", "pe_viz.py"):
+for f in ("pe_app.py", "pe_data.py", "pe_qc.py", "pe_design.py", "pe_viz.py", "version.py",
+          "selftest.py", "build_info.json"):
     datas.append((os.path.join(ROOT, "app", f), "app"))
 datas.append((os.path.join(ROOT, "tools", "planteye_io.py"), "tools"))
 
+# matplotlib picks its output backend by NAME at save time (importlib), which PyInstaller's static
+# analysis can't see — v1.2.0 shipped without the PDF backend, so PDF export failed only in the
+# packaged app. Every backend the app saves with must be listed here; `--selftest` checks them.
 hiddenimports += [
-    "matplotlib", "matplotlib.backends.backend_agg", "mpl_toolkits.mplot3d",
-    "openpyxl", "pandas", "numpy", "pyarrow",
+    "matplotlib", "matplotlib.backends.backend_agg", "matplotlib.backends.backend_pdf",
+    "matplotlib.backends.backend_svg", "matplotlib.backends.backend_mixed", "mpl_toolkits.mplot3d",
+    "openpyxl", "pandas", "numpy", "pyarrow", "PIL.GifImagePlugin", "PIL.PngImagePlugin",
 ]
 
 a = Analysis(

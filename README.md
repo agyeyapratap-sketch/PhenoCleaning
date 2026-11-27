@@ -62,6 +62,8 @@ Download the latest build for your OS from the **[Releases](../../releases)** pa
 | **macOS (Apple Silicon *or* Intel)** | `PhenoCleaning-macOS-universal2-portable.zip` | Unzip → right-click `PhenoCleaning` → **Open** (first time) |
 | **Linux** | `PhenoCleaning-Linux-x64-portable.zip` | Unzip → `./PhenoCleaning/PhenoCleaning` |
 
+**Updating:** delete the previous `PhenoCleaning` folder completely before unzipping a new version — don't unzip over it (old files left behind can break the new build). The version you're running is shown at the bottom of the app's sidebar.
+
 The app opens in your browser at `http://localhost:8501`. It runs on your own machine, so it reads
 your local and network-drive data directly. (First launch on Windows/macOS may warn about an
 unidentified developer — see `PUBLISHING.md` for code-signing/notarization notes.)

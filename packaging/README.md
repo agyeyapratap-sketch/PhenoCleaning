@@ -63,3 +63,7 @@ The spec **excludes** `torch`, `tensorflow`, `jax`, `scipy`, `IPython`/notebook,
 they may be installed on your dev machine but the app never uses them, and torch in particular broke
 the Windows build with over-long paths. If you add a feature that needs a new library, add it to `requirements.txt`
 and (if PyInstaller misses it) to `hiddenimports` in `phenocleaning.spec`, then rebuild.
+
+## Self-test (required before every release)
+
+After building, run `dist/PhenoCleaning/PhenoCleaning --selftest` (`.exe` on Windows). It renders PNG/PDF/SVG/GIF, 3D views, reads an Excel workbook and combines synthetic exports *inside the packaged app*, and must print `SELFTEST OK` (exit 0). CI runs it after every build and stops before zipping or attaching anything if it fails. Always build with the spec (`pyinstaller packaging/phenocleaning.spec --clean`): a bare `pyinstaller app/...` regenerates a spec and drops the hidden imports.

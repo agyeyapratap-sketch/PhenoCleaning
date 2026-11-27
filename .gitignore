@@ -50,3 +50,7 @@ cleaned_ply/
 Thumbs.db
 .vscode/
 .idea/
+
+# generated at build time
+app/build_info.json
+logs/

@@ -25,10 +25,64 @@ import pe_data
 import pe_design
 import pe_qc
 import pe_viz
+from version import __version__, version_string
 
-__version__ = "1.2.0"
+VERSION = version_string()
 
-st.set_page_config(page_title="PhenoCleaning", layout="wide", page_icon="🌱")
+
+def _log_dir() -> Path:
+    """logs/ next to PhenoCleaning.exe (packaged) or next to the source (dev); home if not writable."""
+    base = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parents[1])
+    for d in (base / "logs", Path.home() / "PhenoCleaning-logs"):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except OSError:
+            continue
+    return Path.cwd()
+
+
+def log_error(where: str) -> Path | None:
+    """Append the current exception's full traceback to logs/phenocleaning-<date>.log."""
+    import datetime as _dt
+    import traceback as _tb
+    try:
+        f = _log_dir() / f"phenocleaning-{_dt.date.today().isoformat()}.log"
+        with f.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n=== {_dt.datetime.now():%Y-%m-%d %H:%M:%S} · {VERSION} · {where}\n")
+            fh.write(_tb.format_exc())
+        return f
+    except Exception:
+        return None
+
+
+def report_error(where: str):
+    """Plain-English error for the user; the traceback goes to the log file, never the screen."""
+    f = log_error(where)
+    st.error(f"Sorry — {where} hit a problem in **{VERSION}**. Everything else still works. "
+             "Please email the log file below to the developer so it can be fixed"
+             + (f":  \n`{f}`" if f else "."))
+
+
+class guard:
+    """`with tabs[1], guard("the Time-series tab"):` — an error in one tab shows a plain message and is
+    logged, and the rest of the app keeps working. Streamlit's own rerun/stop signals derive from
+    BaseException, so they pass straight through."""
+
+    def __init__(self, where: str):
+        self.where = where
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, et, ev, tb):
+        if et is not None and issubclass(et, Exception):
+            report_error(self.where)
+            return True
+        return False
+
+st.set_page_config(page_title=f"PhenoCleaning {__version__}", layout="wide", page_icon="🌱")
 
 SS = st.session_state
 for k, v in dict(insts=None, union=None, base_union=None, candidates=None, design=None,
@@ -235,7 +289,7 @@ def rescan_resolver(prefix: str, only_unresolved: bool = False) -> int:
 
 # =========================================================================== sidebar
 st.sidebar.title("🌱 PhenoCleaning")
-st.sidebar.caption(f"clean · explore · animate  ·  v{__version__}")
+st.sidebar.caption("clean · explore · animate")
 
 # A convenience default folder can be set locally via the PLANTEYE_DEFAULT_FOLDER environment
 # variable (e.g. in run_app.bat); it is blank otherwise. Never hard-code a path — this ships publicly.
@@ -276,6 +330,12 @@ if SS.union is not None:
 
 PLY_DIR = ply_folder or folder
 
+with st.sidebar.expander("About / report a problem"):
+    st.markdown(f"**{VERSION}**")
+    st.caption("When reporting a problem, include this version line and the latest file from the log "
+               f"folder:  \n`{_log_dir()}`")
+st.sidebar.caption(VERSION)
+
 # =========================================================================== main
 if SS.union is None:
     st.title("PhenoCleaning")
@@ -303,7 +363,7 @@ if SS.union is None:
 tabs = st.tabs(["Data", "Time-series", "3D viewer", "Export", "Advanced"])
 
 # ---- Data -----------------------------------------------------------------
-with tabs[0]:
+with tabs[0], guard("the Data tab"):
     u = SS.union
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Plant scans", int((~u["is_blank"]).sum()))
@@ -364,7 +424,7 @@ with tabs[0]:
         st.code(FOLDER_LAYOUT, language="text")
 
 # ---- Time-series ----------------------------------------------------------
-with tabs[1]:
+with tabs[1], guard("the Time-series tab"):
     u = clean_rows().copy()
     traits = pe_data.measure_columns(u)
     if not traits:
@@ -458,9 +518,16 @@ with tabs[1]:
                        "the size you set, so text appears exactly as in the exported file.")
             stem = re.sub(r"[^A-Za-z0-9]+", "_", f"{trait} by {grp or 'all'}").strip("_")
             e1, e2, e3, e4, e5 = st.columns(5)
-            e1.download_button("⬇ PNG", pe_viz.figure_bytes(fig, "png", dpi=dpi), f"{stem}.png", "image/png")
-            e2.download_button("⬇ PDF", pe_viz.figure_bytes(fig, "pdf"), f"{stem}.pdf", "application/pdf")
-            e3.download_button("⬇ SVG", pe_viz.figure_bytes(fig, "svg"), f"{stem}.svg", "image/svg+xml")
+            for col, fmt, mime in ((e1, "png", "image/png"), (e2, "pdf", "application/pdf"),
+                                   (e3, "svg", "image/svg+xml")):
+                try:   # each format on its own, so one failing never takes the others down
+                    data = pe_viz.figure_bytes(fig, fmt, dpi=dpi)
+                except Exception:
+                    f = log_error(f"{fmt.upper()} figure export")
+                    col.caption(f"⚠ {fmt.upper()} export unavailable in this build ({__version__}). "
+                                "Please report it" + (f" — log: `{f.name}`" if f else "") + ".")
+                    continue
+                col.download_button(f"⬇ {fmt.upper()}", data, f"{stem}.{fmt}", mime)
             e4.download_button("⬇ Plotted values (CSV)", summary.to_csv(index=False).encode("utf-8"),
                                f"{stem}_summary.csv", "text/csv")
             if e5.button("🎞 Animate"):
@@ -472,7 +539,7 @@ with tabs[1]:
                 show_anim(SS["last_chart"])
 
 # ---- 3D viewer ------------------------------------------------------------
-with tabs[2]:
+with tabs[2], guard("the 3D viewer"):
     has_ply = bool(PLY_DIR) and Path(PLY_DIR).exists()
     inv = ply_inventory(PLY_DIR) if has_ply else pd.DataFrame()
     skipped = ply_skipped(PLY_DIR) if has_ply else []
@@ -612,7 +679,7 @@ with tabs[2]:
                 show_anim(SS["last_cmp"])
 
 # ---- Export ---------------------------------------------------------------
-with tabs[3]:
+with tabs[3], guard("the Export tab"):
     u = clean_rows().copy()
     u["days_elapsed"] = (u["date"] - u["date"].min()).dt.days
     st.subheader("Cleaned dataset")
@@ -698,12 +765,12 @@ def render_finding(f):
             st.dataframe(f.detail, width="stretch", hide_index=True)
 
 
-with tabs[4]:
+with tabs[4], guard("the Advanced tab"):
     st.caption("Optional tools for deeper checks. Nothing here is needed for a basic clean-up.")
     sub = st.tabs(["Factors", "Remove scans", "Quality checks", "Missing data", "Outliers", "Design",
                    "Ground truth"])
     sub = [sub[0], *sub[2:], sub[1]]   # keep the existing section order below; Remove scans is last
-    with sub[0]:
+    with sub[0], guard("Advanced → Factors"):
         st.subheader("Define grouping factors (optional)")
         if SS.flash:
             st.success(SS.flash)
@@ -770,7 +837,7 @@ with tabs[4]:
                     st.rerun()
             st.markdown("**Factors available for grouping:** " + ", ".join(factor_options(SS.union)))
 
-    with sub[1]:
+    with sub[1], guard("Advanced → Quality checks"):
         st.subheader("Quality checks")
         if SS.union is None:
             st.info("Combine the exports first (press Load experiment).")
@@ -789,7 +856,7 @@ with tabs[4]:
                 for f in adv:
                     render_finding(f)
 
-    with sub[2]:
+    with sub[2], guard("Advanced → Missing data"):
         st.subheader("Missing-data analysis")
         if SS.union is None:
             st.info("Combine the exports first (press Load experiment).")
@@ -831,7 +898,7 @@ with tabs[4]:
                     if SS.gt[c].notna().sum() == 0:
                         st.error(f"**{c.replace('manual_','')}** produced no numeric values at all.")
 
-    with sub[3]:
+    with sub[3], guard("Advanced → Outliers"):
         st.subheader("Zero, missing, and outlier scans")
         st.caption("Suggestions only — choose which scans to drop, keep or relabel. Every decision is "
                    "logged and can be cleared.")
@@ -893,7 +960,7 @@ with tabs[4]:
                         st.success(f"{action.title()} applied to {len(picks)} scan(s).")
                         st.rerun()
 
-    with sub[4]:
+    with sub[4], guard("Advanced → Design"):
         st.subheader("Design workbook (optional)")
         if SS.design is None:
             st.info("No design workbook loaded — the app just uses the labels in your scans, which is fine. "
@@ -930,7 +997,7 @@ with tabs[4]:
                     "can separate them from the data alone. Declare it, and lean on the interactions that "
                     "difference the group effect out.")
 
-    with sub[5]:
+    with sub[5], guard("Advanced → Ground truth"):
         st.subheader("Validate against manual measurements (optional)")
         if SS.gt is None:
             st.info("No manual-measurement workbook loaded. Add one in the sidebar (e.g. Plant Height / "
@@ -976,7 +1043,7 @@ with tabs[4]:
                     st.warning(f"**{c.replace('manual_','')}** produced no numeric values"
                                + (f" ({n_nn} free-text entr(y/ies), coerced and flagged)." if n_nn else "."))
 
-    with sub[6]:
+    with sub[6], guard("Advanced → Remove scans"):
         st.subheader("Remove bad scans")
         st.caption("Take scans out of the analysis: a rogue or test scan, a carrier scanned by mistake, a dead "
                    "or mislabelled plant, or a whole bad day. Choose any combination below — an empty box "

@@ -32,7 +32,22 @@ def _open_browser_when_ready(timeout: int = 90) -> None:
             time.sleep(0.5)
 
 
+def selftest() -> int:
+    """`PhenoCleaning --selftest`: exercise the export/3D/data paths inside the frozen build."""
+    os.environ.setdefault("MPLBACKEND", "Agg")
+    for sub in ("app", "tools"):
+        sys.path.insert(0, str(_base() / sub))
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    import selftest as st_mod
+    return st_mod.run()
+
+
 def main() -> None:
+    if "--selftest" in sys.argv[1:]:
+        sys.exit(selftest())
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
     os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"

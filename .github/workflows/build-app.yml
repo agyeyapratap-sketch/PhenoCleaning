@@ -69,6 +69,18 @@ jobs:
           PYI_TARGET_ARCH: ${{ runner.os == 'macOS' && 'universal2' || '' }}
         run: pyinstaller packaging/phenocleaning.spec --noconfirm
 
+      # Run the self-test INSIDE the packaged app. PyInstaller can silently drop modules that are only
+      # imported by name at runtime (v1.2.0 shipped without matplotlib's PDF backend). If this fails,
+      # every later step is skipped, so a broken build is never zipped or attached to a release.
+      - name: Self-test the packaged app (blocks the release on failure)
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then EXE=dist/PhenoCleaning/PhenoCleaning.exe
+          else EXE=dist/PhenoCleaning/PhenoCleaning; fi
+          "$EXE" --selftest
+
       # Confirm the macOS build is genuinely universal2 (both arch slices present), not silently arm64-only.
       - name: Verify universal2 slices (macOS)
         if: runner.os == 'macOS'
