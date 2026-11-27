@@ -13,7 +13,7 @@ authors:
   - given-names: Agyeya
     family-names: Pratap
     affiliation: "Australian Plant Phenomics Network, The University of Western Australia"
-version: "1.2.1"
+version: "1.2.2"
 license: MIT
 repository-code: "https://github.com/agyeyapratap-sketch/planteye-pipeline"
 keywords:

@@ -7,7 +7,7 @@ exactly which build a user has.
 import json
 from pathlib import Path
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 
 def build_info() -> dict:

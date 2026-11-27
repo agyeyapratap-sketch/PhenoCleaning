@@ -27,7 +27,7 @@ inside it. To distribute: zip the whole `PhenoCleaning` folder (they unzip and d
 or wrap it in the Windows installer:
 
 ```powershell
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.1 packaging\installer.iss   # -> packaging\Output\PhenoCleaning-Setup.exe
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.2 packaging\installer.iss   # -> packaging\Output\PhenoCleaning-Setup.exe
 # (use the version in app/version.py — CI passes it automatically)
 ```
 

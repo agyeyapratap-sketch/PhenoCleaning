@@ -1,7 +1,7 @@
 ; Inno Setup script — wraps the PyInstaller one-folder build into a Windows installer.
 ; Build the app first (pyinstaller packaging\phenocleaning.spec), then compile this with Inno Setup,
 ; passing the version from app/version.py (CI does this automatically):
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.1 packaging\installer.iss
+;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.2 packaging\installer.iss
 ; Output: packaging\Output\PhenoCleaning-Setup.exe  (a double-click installer for non-coders).
 ; The CI workflow (.github/workflows/build-app.yml) compiles this automatically on Windows.
 
