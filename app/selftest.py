@@ -107,7 +107,34 @@ def run() -> int:
     def ui():
         import streamlit  # noqa: F401
 
+    def image_serving():
+        """The web server must send headers before the body for images. Starlette 1.10 + Streamlit
+        1.59.2 sent image responses without headers, so every graph/3D view/GIF failed to load."""
+        import asyncio
+        from starlette.responses import Response
+        from streamlit.web.server.starlette.starlette_gzip_middleware import SelectiveGZipMiddleware
+
+        async def one(ctype, accept):
+            sent = []
+
+            async def send(m):
+                sent.append(m["type"])
+
+            async def receive():
+                return {"type": "http.request"}
+
+            app = SelectiveGZipMiddleware(Response(b"x" * 5000, media_type=ctype), minimum_size=500)
+            await app({"type": "http", "path": "/media/x",
+                       "headers": [(b"accept-encoding", accept)]}, receive, send)
+            return sent
+
+        for ctype in ("image/png", "image/gif", "application/pdf", "text/csv"):
+            for accept in (b"gzip", b""):
+                sent = asyncio.run(one(ctype, accept))
+                assert sent[:1] == ["http.response.start"], f"{ctype} (gzip={bool(accept)}): {sent}"
+
     check("figure export: PNG, PDF, SVG and animated GIF", figures)
+    check("web server sends images, PDFs and CSVs correctly", image_serving)
     check("3D rendering: still view and turntable", three_d)
     check("Excel workbooks (openpyxl)", excel)
     check("combine exports: unique names, 2-row carrier, duplicate scans", data)

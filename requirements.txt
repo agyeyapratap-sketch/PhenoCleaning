@@ -5,3 +5,9 @@ pandas==3.0.3
 matplotlib==3.11.0
 pillow==12.3.0          # used directly to encode the turntable animation (also a matplotlib dep)
 openpyxl==3.1.5
+# Streamlit's web server pieces, pinned to the tested versions. Streamlit only says "starlette" with no
+# upper bound, so a fresh build pulled Starlette 1.10, whose gzip change makes Streamlit 1.59.2 send
+# image responses without headers: graphs, 3D views and GIFs silently failed to load (v1.2.0).
+# `--selftest` checks image serving; only bump these together with Streamlit, after it passes.
+starlette==1.3.1
+uvicorn==0.51.0
