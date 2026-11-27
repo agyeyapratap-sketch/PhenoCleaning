@@ -13,6 +13,9 @@ cross-compiled).
   under the distinct name **PhenoCleaning**. That name appears in `README.md`,
   `CITATION.cff`, `packaging/installer.iss`, `packaging/phenocleaning.spec` (the `name=` and exe), and
   the app title in `app/pe_app.py`.
+- **Bump the version in one place:** `app/version.py`. The app's sidebar, the build stamp, the
+  Windows installer (CI passes it to Inno Setup) and the release must all match; also update
+  `CITATION.cff`, then tag `vX.Y.Z`.
 - **Data is already excluded.** `.gitignore` keeps out all data (`*.ply/*.zip/*.xlsx/*.csv`), the
   unpublished `docs/` PDF, dev-only scripts, and build outputs. Institutional paths were removed
   from the code. Nothing private should be committed — verify in step 3.
@@ -99,9 +102,10 @@ git push -u origin main
 If you'd rather not use CI for Windows:
 ```powershell
 # 1) build the app (short output path avoids Windows' 260-char limit)
-pyinstaller packaging\phenocleaning.spec --noconfirm
-# 2) compile the installer
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+pyinstaller packaging\phenocleaning.spec --noconfirm --clean
+dist\PhenoCleaning\PhenoCleaning.exe --selftest      # must print SELFTEST OK
+# 2) compile the installer — the version must match app/version.py
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.2.1 packaging\installer.iss
 # -> packaging\Output\PhenoCleaning-Setup.exe
 ```
 

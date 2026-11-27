@@ -112,7 +112,11 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+          # The installer's version comes from app/version.py (the single source of truth).
+          $ver = python -c "import sys; sys.path.insert(0, 'app'); from version import __version__; print(__version__)"
+          Write-Host "Installer version: $ver"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows installer
         if: runner.os == 'Windows'
