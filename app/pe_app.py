@@ -59,10 +59,72 @@ def log_error(where: str) -> Path | None:
 
 def report_error(where: str):
     """Plain-English error for the user; the traceback goes to the log file, never the screen."""
-    f = log_error(where)
+    log_error(where)
     st.error(f"Sorry — {where} hit a problem in **{VERSION}**. Everything else still works. "
-             "Please email the log file below to the developer so it can be fixed"
-             + (f":  \n`{f}`" if f else "."))
+             "Please use **⬇ Download logs for debugging** (sidebar → *About / report a problem*) and "
+             "email the file to the developer so it can be fixed.")
+
+
+def _attach_server_logging() -> None:
+    """Also send the web server's own warnings and errors (Streamlit, uvicorn, Starlette) to today's
+    log file — those happen outside the app's code (e.g. the v1.2.0 'Expected ASGI message' error that
+    stopped graphs showing) and otherwise only reach the console window. Once per process."""
+    import datetime as _dt
+    import logging
+    if getattr(sys, "_phenocleaning_server_log", False):
+        return
+    try:
+        f = _log_dir() / f"phenocleaning-{_dt.date.today().isoformat()}.log"
+        h = logging.FileHandler(f, encoding="utf-8")
+        h.setLevel(logging.WARNING)
+        h.setFormatter(logging.Formatter(f"\n=== %(asctime)s · {VERSION} · server · %(name)s · "
+                                         "%(levelname)s\n%(message)s"))
+        logging.getLogger().addHandler(h)
+        for name in ("streamlit", "uvicorn", "uvicorn.error", "uvicorn.asgi", "starlette"):
+            lg = logging.getLogger(name)
+            if not lg.propagate:      # loggers that don't pass records up to the root logger
+                lg.addHandler(h)
+        sys._phenocleaning_server_log = True
+    except Exception:
+        pass
+
+
+def debug_bundle() -> bytes:
+    """A zip for the developer: every log file, plus diagnostics (version, OS, library versions,
+    what is loaded, and this session's decision log). Contains folder paths and file names but no
+    measurement data."""
+    import datetime as _dt
+    import io as _io
+    import platform
+    import zipfile
+    mods = {}
+    for m in ("streamlit", "starlette", "uvicorn", "matplotlib", "pandas", "numpy", "PIL", "openpyxl"):
+        try:
+            mods[m] = getattr(__import__(m), "__version__", "?")
+        except Exception as e:
+            mods[m] = f"not importable ({type(e).__name__})"
+    lines = [VERSION, f"created {_dt.datetime.now():%Y-%m-%d %H:%M:%S}",
+             f"OS: {platform.platform()}", f"Python: {sys.version.split()[0]}",
+             f"packaged: {bool(getattr(sys, 'frozen', False))}", f"log folder: {_log_dir()}", "",
+             "Libraries:"] + [f"  {k} {v}" for k, v in mods.items()]
+    if SS.get("insts"):
+        lines += ["", f"Exports loaded ({len(SS.insts)}):"]
+        lines += [f"  {i.name}  ({len(i.df)} rows, {i.path.suffix}){'  [stale]' if i.is_stale else ''}"
+                  for i in SS.insts]
+    if SS.get("union") is not None:
+        u = SS.union
+        lines += [f"Combined: {len(u)} rows, {u['block'].nunique()} carriers, {u['date'].nunique()} dates; "
+                  f"{len(SS.decisions)} decision(s)"]
+    lines += ["", "Session log:"] + [f"  {a}" for a in SS.get("audit", [])]
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("diagnostics.txt", "\n".join(lines))
+        for f in sorted(_log_dir().glob("phenocleaning-*.log"))[-30:]:
+            try:
+                z.write(f, f"logs/{f.name}")
+            except OSError:
+                pass
+    return buf.getvalue()
 
 
 class guard:
@@ -330,10 +392,16 @@ if SS.union is not None:
 
 PLY_DIR = ply_folder or folder
 
+_attach_server_logging()
 with st.sidebar.expander("About / report a problem"):
     st.markdown(f"**{VERSION}**")
-    st.caption("When reporting a problem, include this version line and the latest file from the log "
-               f"folder:  \n`{_log_dir()}`")
+    st.download_button("⬇ Download logs for debugging", debug_bundle(),
+                       f"phenocleaning-logs-{pd.Timestamp.now():%Y%m%d-%H%M}.zip", "application/zip",
+                       key="dl_debug_logs", width="stretch",
+                       help="One zip with the error logs and a diagnostics file (version, system, "
+                            "library versions, what's loaded, your decisions). It includes folder and "
+                            "file names but none of your measurement data. Email it to the developer.")
+    st.caption(f"Logs are also kept in:  \n`{_log_dir()}`")
 st.sidebar.caption(VERSION)
 
 # =========================================================================== main
